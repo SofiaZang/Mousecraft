@@ -7,23 +7,25 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QFileDialog, QSpinBox, QDoubleSpinBox, 
     QGroupBox, QGridLayout, QTextEdit, QComboBox, QCheckBox,
-    QMessageBox, QProgressBar, QSplitter, QLineEdit
+    QMessageBox, QProgressBar, QSplitter, QLineEdit, QSizePolicy
 )
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import os
+from PyQt5.QtWidgets import QStyle
+import csv
 
 class DraggableTimeline(FigureCanvas):
     """Custom matplotlib canvas with draggable timeline"""
     timeline_moved = pyqtSignal(int)
     
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(12, 4))
+        self.fig = Figure(figsize=(10, 4.0))  # Increased height for better visibility
         super().__init__(self.fig)
         self.setParent(parent)
         
@@ -76,8 +78,6 @@ class DraggableTimeline(FigureCanvas):
         
     def plot_motion_energy(self, motion_energy, onsets=None, onset_types=None, event_offsets=None, event_status=None):
         import numpy as np
-        self.fig.set_size_inches(30, 5)
-        self.fig.set_dpi(200)
 
         self.motion_energy = motion_energy
         self.total_frames = len(motion_energy)
@@ -87,34 +87,59 @@ class DraggableTimeline(FigureCanvas):
         self.event_status = event_status or {}
 
         self.ax.clear()
+        self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='blue', linewidth=1)
 
-        frames = np.arange(self.total_frames)
-        motion_signal_norm = (motion_energy - np.min(motion_energy)) / (np.max(motion_energy) - np.min(motion_energy))
-        self.ax.plot(frames, motion_signal_norm, color='blue', linewidth=0.3)
-
+        # Plot onset-to-offset spans
         for onset in self.onsets:
-            onset_type = self.onset_types.get(onset, 'unknown')
+            onset_type = self.onset_types.get(onset, '')
             offset = self.event_offsets.get(onset, onset)
-            if onset_type == 'active':
-                self.ax.axvspan(onset, offset, color='orange', alpha=0.3)
-            elif onset_type == 'twitch':
-                self.ax.axvspan(onset, onset+2, color='purple', alpha=0.7)
+            status = self.event_status.get(onset, '')
+            alpha = 1.0 if status == 'accepted' else 0.4
+            
+            if onset_type == 'twitch':
+                self.ax.axvspan(onset, offset, color='purple', alpha=alpha)
+            elif onset_type == 'active':
+                self.ax.axvspan(onset, offset, color='yellow', alpha=alpha)
 
-        # Set limits LAST, after all artists are added
+        # Add validation markers as bullet points on top
+        for onset in self.onsets:
+            validation = self.onset_validations.get(onset, 'pending')
+            if validation == 'accepted':
+                # Green bullet for accepted
+                self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
+            elif validation == 'rejected':
+                # Red bullet for rejected
+                self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
+            elif validation == 'edited':
+                # Orange bullet for edited
+                self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='orange', markersize=6)
+
         self.ax.set_xlim(0, max(self.total_frames, 1000))
-        self.ax.set_ylim(0, 1.1)
+        self.ax.set_ylim(0, max(self.motion_energy) * 1.2)  # Increased ylim to accommodate bullets
         self.ax.set_ylabel("motion_energy", fontsize=7)
         self.ax.set_xlabel("Frame", fontsize=7)
         self.ax.set_title("classified motion", fontsize=9)
         self.ax.set_yticks([])
         self.ax.tick_params(axis='x', labelsize=6)
+
         self.fig.tight_layout()
         self.fig.canvas.draw_idle()
         self.update_timeline()
         
+    def plot_motion_energy_preserve_view(self, *args, **kwargs):
+        self.plot_motion_energy(*args, **kwargs)
+        self.draw()
+
     def set_onset_validation(self, onset, validation):
+        # Store current view limits
+        # xlim = self.ax.get_xlim()
+        # ylim = self.ax.get_ylim()
         self.onset_validations[onset] = validation
-        self.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.event_offsets, self.event_status)
+        self.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.event_offsets, self.event_status)
+        # Restore view limits
+        # self.ax.set_xlim(xlim)
+        # self.ax.set_ylim(ylim)
+        self.draw()
         
     def add_event(self, onset, event_type, offset=None):
         """Add a new event to the timeline"""
@@ -122,7 +147,7 @@ class DraggableTimeline(FigureCanvas):
         self.onset_types[onset] = event_type
         if offset is not None:
             self.event_offsets[onset] = offset
-        self.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.event_offsets, self.event_status)
+        self.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.event_offsets, self.event_status)
         
     def remove_event(self, onset):
         """Remove an event from the timeline"""
@@ -134,9 +159,39 @@ class DraggableTimeline(FigureCanvas):
             del self.onset_validations[onset]
         if onset in self.event_offsets:
             del self.event_offsets[onset]
-        self.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.event_offsets, self.event_status)
+        self.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.event_offsets, self.event_status)
+
+    def wheelEvent(self, event):
+        # Zoom in/out on scroll, centered on current_frame
+        ax = self.ax
+        xlim = ax.get_xlim()
+        center = self.current_frame
+        width = xlim[1] - xlim[0]
+        if event.angleDelta().y() > 0:
+            # Zoom in
+            new_width = width / 2
+        else:
+            # Zoom out
+            new_width = width * 2
+        new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.total_frames))
+        ax.set_xlim(new_xlim)
+        self.draw()
+        event.accept()
 
 class MotionAnnotator(QWidget):
+    """J'ai rajouté cette fonction"""
+    def find_closest_onset_idx(self, frame):
+        """Return the index of the closest onset <= frame, or 0 if none."""
+        if not self.onsets:
+            return 0
+        idx = 0
+        for i, onset in enumerate(self.onsets):
+            if onset <= frame:
+                idx = i
+            else:
+                break
+        return idx
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TwitchCraft")
@@ -163,8 +218,6 @@ class MotionAnnotator(QWidget):
         self.performance_metrics = {
             'true_positives': 0,
             'false_positives': 0,
-            'true_negatives': 0,
-            'false_negatives': 0
         }
         
         self.init_ui()
@@ -177,11 +230,13 @@ class MotionAnnotator(QWidget):
         # Left panel - Video and controls
         left_panel = QVBoxLayout()
 
-        # Video display
+        # Video display - smaller size with zoom capability
         self.video_label = QLabel("Load a video to start")
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setMinimumSize(600, 450)  # Made smaller
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Make it expand
         self.video_label.setStyleSheet("border: 2px solid gray;")
+        self.video_zoom_factor = 1.0  # Track zoom level
         left_panel.addWidget(self.video_label)
 
         # Video controls
@@ -195,23 +250,54 @@ class MotionAnnotator(QWidget):
         self.pause_btn.clicked.connect(self.pause)
         self.stop_btn = QPushButton("Stop ⏹")
         self.stop_btn.clicked.connect(self.stop)
-        self.speed_spinbox = QDoubleSpinBox()
-        self.speed_spinbox.setRange(0.1, 5.0)
-        self.speed_spinbox.setValue(1.0)
-        self.speed_spinbox.setSingleStep(0.1)
-        self.speed_spinbox.valueChanged.connect(self.update_playback_speed)
-        self.fps_spinbox = QSpinBox()
-        self.fps_spinbox.setRange(1, 50)
-        self.fps_spinbox.setValue(30)
-        self.fps_spinbox.valueChanged.connect(self.update_fps)
-        video_layout.addWidget(self.load_video_btn, 0, 0)
-        video_layout.addWidget(self.play_btn, 0, 1)
-        video_layout.addWidget(self.pause_btn, 0, 2)
-        video_layout.addWidget(self.stop_btn, 0, 3)
-        video_layout.addWidget(QLabel("Speed:"), 1, 0)
-        video_layout.addWidget(self.speed_spinbox, 1, 1)
-        video_layout.addWidget(QLabel("FPS:"), 1, 2)
-        video_layout.addWidget(self.fps_spinbox, 1, 3)
+        # Remove speed and fps spinboxes, add FPS QLineEdit
+        self.fps_lineedit = QLineEdit()
+        self.fps_lineedit.setPlaceholderText("FPS")
+        self.fps_lineedit.setValidator(QIntValidator(1, 1000, self))
+        self.fps_lineedit.textChanged.connect(self.handle_fps_change)
+        # Load video button on its own row
+        video_layout.addWidget(self.load_video_btn, 0, 0, 1, 4)  # Span all 4 columns
+        
+        # Play/pause/stop buttons on second row with equal sizes, next to each other
+        self.play_btn.setFixedWidth(80)
+        self.pause_btn.setFixedWidth(80)
+        self.stop_btn.setFixedWidth(80)
+        play_pause_layout = QHBoxLayout()
+        play_pause_layout.addWidget(self.play_btn)
+        play_pause_layout.addWidget(self.pause_btn)
+        play_pause_layout.addWidget(self.stop_btn)
+        video_layout.addLayout(play_pause_layout, 1, 0, 1, 4)  # Span all columns
+        
+        # FPS controls on third row
+        self.fps_lineedit.setFixedWidth(60)  # Make FPS input smaller
+        video_layout.addWidget(QLabel("FPS:"), 2, 0)
+        video_layout.addWidget(self.fps_lineedit, 2, 1)
+        
+        # Add video zoom controls
+        self.zoom_in_video_btn = QPushButton("🔍+")
+        self.zoom_out_video_btn = QPushButton("🔍-")
+        self.reset_video_zoom_btn = QPushButton("Reset Zoom")
+        
+        # Set fixed width for zoom buttons to make them the same size
+        self.zoom_in_video_btn.setFixedWidth(70)
+        self.zoom_out_video_btn.setFixedWidth(70)
+        
+        self.zoom_in_video_btn.clicked.connect(self.zoom_in_video)
+        self.zoom_out_video_btn.clicked.connect(self.zoom_out_video)
+        self.reset_video_zoom_btn.clicked.connect(self.reset_video_zoom)
+        
+        # Create horizontal layout for zoom buttons
+        zoom_buttons_layout = QHBoxLayout()
+        zoom_buttons_layout.addWidget(self.zoom_in_video_btn)
+        zoom_buttons_layout.addWidget(self.zoom_out_video_btn)
+        zoom_buttons_layout.addWidget(self.reset_video_zoom_btn)
+        
+        # Make reset zoom button fit with zoom buttons
+        self.reset_video_zoom_btn.setFixedWidth(80)
+        
+        video_layout.addWidget(QLabel("Video Zoom:"), 3, 0)
+        video_layout.addLayout(zoom_buttons_layout, 3, 1)
+        
         video_controls.setLayout(video_layout)
         left_panel.addWidget(video_controls)
 
@@ -223,6 +309,11 @@ class MotionAnnotator(QWidget):
         # Frame info
         self.frame_info_label = QLabel("Frame: 0 / 0")
         left_panel.addWidget(self.frame_info_label)
+        
+        # Add onset status bar below video
+        self.onset_status_label = QLabel("No onset at current frame")
+        self.onset_status_label.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
+        left_panel.addWidget(self.onset_status_label)
 
         # Manual event addition
         manual_event_group = QGroupBox("Manual Event Addition")
@@ -261,8 +352,25 @@ class MotionAnnotator(QWidget):
         timeline_group = QGroupBox("Motion Energy Timeline")
         timeline_layout = QVBoxLayout()
         self.timeline_canvas = DraggableTimeline()
+        self.timeline_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Allow more vertical expansion
+        self.timeline_canvas.setMinimumHeight(350)  # Increased minimum height
+        self.timeline_canvas.setMaximumHeight(500)  # Increased maximum height
         self.timeline_canvas.timeline_moved.connect(self.timeline_frame_changed)
         timeline_layout.addWidget(self.timeline_canvas)
+        
+        # Add custom zoom in/out and reset buttons (same style as video zoom)
+        zoom_btn_layout = QHBoxLayout()
+        self.zoom_in_btn = QPushButton('🔍+')
+        self.zoom_out_btn = QPushButton('🔍-')
+        self.reset_zoom_btn = QPushButton('Reset Zoom')
+        self.zoom_in_btn.clicked.connect(self.zoom_in_timeline)
+        self.zoom_out_btn.clicked.connect(self.zoom_out_timeline)
+        self.reset_zoom_btn.clicked.connect(self.reset_zoom_timeline)
+        zoom_btn_layout.addWidget(self.zoom_in_btn)
+        zoom_btn_layout.addWidget(self.zoom_out_btn)
+        zoom_btn_layout.addWidget(self.reset_zoom_btn)
+        timeline_layout.addLayout(zoom_btn_layout)
+        
         timeline_controls = QHBoxLayout()
         self.load_me_btn = QPushButton("Load Motion Energy")
         self.load_me_btn.clicked.connect(self.load_motion_energy)
@@ -272,9 +380,21 @@ class MotionAnnotator(QWidget):
         timeline_controls.addWidget(self.load_class_btn)
         timeline_layout.addLayout(timeline_controls)
         timeline_group.setLayout(timeline_layout)
-        right_panel.addWidget(timeline_group)
         onset_group = QGroupBox("Onset Navigation & Validation")
         onset_layout = QVBoxLayout()
+        # Add filter combo boxes side by side
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Event type"))
+        self.onset_filter_combo = QComboBox()
+        self.onset_filter_combo.addItems(["All", "Active", "Twitch"])
+        self.onset_filter_combo.currentIndexChanged.connect(self.update_onset_filter)
+        filter_layout.addWidget(self.onset_filter_combo)
+        filter_layout.addWidget(QLabel("Event status"))
+        self.status_filter_combo = QComboBox()
+        self.status_filter_combo.addItems(["All", "Editing", "Pending", "Accepted", "Rejected", "Manually Added"])
+        self.status_filter_combo.currentIndexChanged.connect(self.update_onset_filter)
+        filter_layout.addWidget(self.status_filter_combo)
+        onset_layout.addLayout(filter_layout)
         nav_layout = QHBoxLayout()
         self.prev_onset_btn = QPushButton("← Prev Onset")
         self.next_onset_btn = QPushButton("Next Onset →")
@@ -288,46 +408,51 @@ class MotionAnnotator(QWidget):
         validation_layout = QHBoxLayout()
         self.accept_btn = QPushButton("✓ Accept")
         self.reject_btn = QPushButton("✗ Reject")
-        self.delete_btn = QPushButton("🗑 Delete")
         self.accept_btn.clicked.connect(lambda: self.validate_onset('accepted'))
         self.reject_btn.clicked.connect(lambda: self.validate_onset('rejected'))
-        self.delete_btn.clicked.connect(self.delete_current_onset)
         validation_layout.addWidget(self.accept_btn)
         validation_layout.addWidget(self.reject_btn)
-        validation_layout.addWidget(self.delete_btn)
+        # Add Edit button
+        self.edit_btn = QPushButton("✎ Edit")
+        self.edit_btn.clicked.connect(self.start_edit_onset)
+        validation_layout.addWidget(self.edit_btn)
         onset_layout.addLayout(validation_layout)
-        edit_layout = QHBoxLayout()
-        self.shift_left_btn = QPushButton("← Shift Left")
-        self.shift_right_btn = QPushButton("Shift Right →")
-        self.shift_step_spinbox = QSpinBox()
-        self.shift_step_spinbox.setRange(1, 30)
-        self.shift_step_spinbox.setValue(1)
-        self.shift_left_btn.clicked.connect(lambda: self.shift_onset(-self.shift_step_spinbox.value()))
-        self.shift_right_btn.clicked.connect(lambda: self.shift_onset(self.shift_step_spinbox.value()))
-        edit_layout.addWidget(self.shift_left_btn)
-        edit_layout.addWidget(QLabel("Step:"))
-        edit_layout.addWidget(self.shift_step_spinbox)
-        edit_layout.addWidget(self.shift_right_btn)
-        onset_layout.addLayout(edit_layout)
+        # Remove shift left/right buttons and their layout
+        # Add edit widgets (hidden by default)
+        self.edit_widget = QWidget()
+        edit_form = QHBoxLayout()
+        self.edit_onset_spinbox = QSpinBox()
+        self.edit_onset_spinbox.setRange(0, 999999)
+        self.edit_offset_spinbox = QSpinBox()
+        self.edit_offset_spinbox.setRange(0, 999999)
+        edit_form.addWidget(QLabel("New Onset:"))
+        edit_form.addWidget(self.edit_onset_spinbox)
+        edit_form.addWidget(QLabel("New Offset:"))
+        edit_form.addWidget(self.edit_offset_spinbox)
+        self.finish_edit_btn = QPushButton("Finish Edit")
+        self.finish_edit_btn.clicked.connect(self.finish_edit_onset)
+        edit_form.addWidget(self.finish_edit_btn)
+        self.edit_widget.setLayout(edit_form)
+        self.edit_widget.hide()
+        onset_layout.addWidget(self.edit_widget)
         onset_group.setLayout(onset_layout)
-        right_panel.addWidget(onset_group)
         save_group = QGroupBox("Save & Export")
-        save_layout = QHBoxLayout()
-        self.save_curated_btn = QPushButton("Save Curated Onsets")
-        self.save_metrics_btn = QPushButton("Save Performance Metrics")
-        self.save_curated_btn.clicked.connect(self.save_curated_onsets)
-        self.save_metrics_btn.clicked.connect(self.save_performance_metrics)
-        save_layout.addWidget(self.save_curated_btn)
-        save_layout.addWidget(self.save_metrics_btn)
+        save_layout = QVBoxLayout()
+        self.save_export_btn = QPushButton("💾 Save and Export Validation")
+        self.save_export_btn.setStyleSheet("QPushButton { font-weight: bold; font-size: 12px; padding: 8px; }")
+        self.save_export_btn.clicked.connect(self.save_and_export_validation)
+        save_layout.addWidget(self.save_export_btn)
         save_group.setLayout(save_layout)
-        right_panel.addWidget(save_group)
-        metrics_group = QGroupBox("Performance Metrics")
+        metrics_group = QGroupBox("Performance Score")
         metrics_layout = QVBoxLayout()
         self.metrics_text = QTextEdit()
-        self.metrics_text.setMaximumHeight(100)
+        self.metrics_text.setMaximumHeight(50)
         self.metrics_text.setReadOnly(True)
         metrics_layout.addWidget(self.metrics_text)
         metrics_group.setLayout(metrics_layout)
+        right_panel.addWidget(timeline_group)
+        right_panel.addWidget(onset_group)
+        right_panel.addWidget(save_group)
         right_panel.addWidget(metrics_group)
         splitter = QSplitter(Qt.Horizontal)
         left_widget = QWidget()
@@ -336,7 +461,7 @@ class MotionAnnotator(QWidget):
         right_widget = QWidget()
         right_widget.setLayout(right_panel)
         splitter.addWidget(right_widget)
-        splitter.setSizes([700, 900])
+        splitter.setSizes([850, 750])  # More balanced - give motion energy more space
         main_layout.addWidget(splitter)
         self.setLayout(main_layout)
         
@@ -355,9 +480,8 @@ class MotionAnnotator(QWidget):
                 return
                 
             self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-            self.fps_spinbox.setValue(int(self.fps))
-            
+            self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+            self.fps_lineedit.setText("")  # Clear FPS input, user must enter manually
             self.frame_slider.setMaximum(self.total_frames - 1)
             self.current_frame = 0
             self.show_frame(self.current_frame)
@@ -366,7 +490,7 @@ class MotionAnnotator(QWidget):
             # Update onset/offset ranges
             self.onset_spinbox.setMaximum(self.total_frames - 1)
             self.offset_spinbox.setMaximum(self.total_frames - 1)
-            
+        
     def load_motion_energy(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Load Motion Energy', '', 'CSV/Excel (*.csv *.xlsx *.npy)')
         if fname:
@@ -614,6 +738,7 @@ class MotionAnnotator(QWidget):
         # Add to data structures
         self.onsets.append(onset)
         self.onset_types[onset] = event_type
+        self.timeline_canvas.event_offsets[onset] = offset  # Store the offset
         
         # Sort onsets
         self.onsets = sorted(self.onsets)
@@ -621,7 +746,10 @@ class MotionAnnotator(QWidget):
         # Update curated events
         if event_type not in self.curated_events:
             self.curated_events[event_type] = []
-        self.curated_events[event_type].append([onset, 1])  # 1 indicates valid event
+        self.curated_events[event_type].append([onset, offset, 0])  # Store onset, offset, and validation status (0 = manually added)
+        
+        # Set validation status to manually added
+        self.timeline_canvas.onset_validations[onset] = 'manually added'
         
         # Go to the new event
         new_idx = self.onsets.index(onset)
@@ -659,8 +787,12 @@ class MotionAnnotator(QWidget):
             
     def play(self):
         if self.cap is not None:
-            interval = int(1000 / (self.fps * self.playback_speed))
-            self.timer.start(interval)
+            # Only play if FPS is set
+            if hasattr(self, 'fps') and self.fps >= 1:
+                interval = int(1000 / self.fps)
+                self.timer.start(interval)
+            else:
+                QMessageBox.warning(self, "Warning", "Please enter a valid FPS before playing.")
             
     def pause(self):
         self.timer.stop()
@@ -671,17 +803,15 @@ class MotionAnnotator(QWidget):
         self.frame_slider.setValue(0)
         self.show_frame(0)
         
-    def update_playback_speed(self, speed):
-        self.playback_speed = speed
-        if self.timer.isActive():
-            interval = int(1000 / (self.fps * self.playback_speed))
-            self.timer.start(interval)
-            
-    def update_fps(self, fps):
-        self.fps = fps
-        if self.timer.isActive():
-            interval = int(1000 / (self.fps * self.playback_speed))
-            self.timer.start(interval)
+    def handle_fps_change(self):
+        text = self.fps_lineedit.text()
+        if text.isdigit() and int(text) >= 1:
+            self.fps = int(text)
+            # Update timer interval if playing
+            if hasattr(self, 'timer') and self.timer.isActive():
+                interval = int(1000 / self.fps)
+                self.timer.start(interval)
+        # If invalid, do not update self.fps
             
     def next_frame(self):
         if self.current_frame < self.total_frames - 1:
@@ -700,36 +830,96 @@ class MotionAnnotator(QWidget):
         if not ret:
             return
             
+        # Check if current frame is an onset (for status bar update)
+        onset_type = self.onset_types.get(frame_num, None)
+        
+        # Optimize video processing for better performance
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = frame.shape
         bytes_per_line = ch * w
         q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
         
-        # Scale to fit label while maintaining aspect ratio
+        # Use faster scaling for better performance with zoom support
         pixmap = QPixmap.fromImage(q_img)
-        scaled_pixmap = pixmap.scaled(self.video_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.video_label.setPixmap(scaled_pixmap)
+        label_size = self.video_label.size()
+        if label_size.width() > 0 and label_size.height() > 0:
+            # Apply zoom factor
+            zoomed_width = int(label_size.width() * self.video_zoom_factor)
+            zoomed_height = int(label_size.height() * self.video_zoom_factor)
+            zoomed_size = QSize(zoomed_width, zoomed_height)
+            scaled_pixmap = pixmap.scaled(zoomed_size, Qt.KeepAspectRatio, Qt.FastTransformation)
+            self.video_label.setPixmap(scaled_pixmap)
         
         self.update_frame_info()
+        self.update_onset_status()
         
     def slider_moved(self, value):
         self.current_frame = value
         self.show_frame(value)
         self.timeline_canvas.current_frame = value
         self.timeline_canvas.update_timeline()
-        
+        # Auto-select closest onset
+        if self.onsets:
+            idx = self.find_closest_onset_idx(value)
+            if idx != self.current_onset_idx:
+                self.goto_onset(idx)
+            else:
+                self.update_onset_info()
+
     def timeline_frame_changed(self, frame):
         self.current_frame = frame
         self.frame_slider.setValue(frame)
         self.show_frame(frame)
+        # Auto-select closest onset
+        if self.onsets:
+            idx = self.find_closest_onset_idx(frame)
+            if idx != self.current_onset_idx:
+                self.goto_onset(idx)
+            else:
+                self.update_onset_info()
         
     def update_frame_info(self):
         self.frame_info_label.setText(f"Frame: {self.current_frame} / {self.total_frames}")
         
-    def goto_onset(self, idx):
-        if 0 <= idx < len(self.onsets):
+    def update_onset_filter(self):
+        # Update filtered_onsets based on both filter selections
+        type_text = self.onset_filter_combo.currentText().lower()
+        status_text = self.status_filter_combo.currentText().lower()
+        # Filter by type
+        if type_text == "all":
+            filtered = self.onsets.copy()
+        else:
+            filtered = [o for o in self.onsets if self.onset_types.get(o, '').lower() == type_text]
+        # Filter by status
+        if status_text != "all":
+            # Handle the "Manually Added" case specifically
+            if status_text == "manually added":
+                filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending') == 'manually added']
+            else:
+                filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending').lower() == status_text]
+        self.filtered_onsets = filtered
+        # Reset current_onset_idx to 0 if needed
+        if not self.filtered_onsets:
+            self.current_onset_idx = 0
+        else:
+            # Try to keep the current frame in view if possible
+            current_frame = self.current_frame
+            idx = 0
+            for i, onset in enumerate(self.filtered_onsets):
+                if onset <= current_frame:
+                    idx = i
+                else:
+                    break
             self.current_onset_idx = idx
-            onset_frame = self.onsets[idx]
+        self.update_onset_info()
+        
+    def goto_onset(self, idx):
+        # Use filtered_onsets for navigation
+        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+            self.filtered_onsets = self.onsets.copy()
+        if 0 <= idx < len(self.filtered_onsets):
+            self.current_onset_idx = idx
+            onset_frame = self.filtered_onsets[idx]
             self.current_frame = onset_frame
             self.frame_slider.setValue(onset_frame)
             self.show_frame(onset_frame)
@@ -738,28 +928,31 @@ class MotionAnnotator(QWidget):
             self.update_onset_info()
             
     def prev_onset(self):
+        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+            self.filtered_onsets = self.onsets.copy()
         if self.current_onset_idx > 0:
             self.goto_onset(self.current_onset_idx - 1)
             
     def next_onset(self):
-        if self.current_onset_idx < len(self.onsets) - 1:
+        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+            self.filtered_onsets = self.onsets.copy()
+        if self.current_onset_idx < len(self.filtered_onsets) - 1:
             self.goto_onset(self.current_onset_idx + 1)
             
     def update_onset_info(self):
-        if not self.onsets:
+        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+            self.filtered_onsets = self.onsets.copy()
+        if not self.filtered_onsets:
             self.onset_info_label.setText("No onsets loaded")
             return
-            
-        current_onset = self.onsets[self.current_onset_idx]
+        current_onset = self.filtered_onsets[self.current_onset_idx]
         onset_type = self.onset_types.get(current_onset, 'unknown')
         validation = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
         offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
-        
-        info_text = f"Onset {self.current_onset_idx + 1}/{len(self.onsets)}: Frame {current_onset}"
+        info_text = f"Onset {self.current_onset_idx + 1}/{len(self.filtered_onsets)}: Frame {current_onset}"
         if offset != current_onset:
             info_text += f" to {offset}"
         info_text += f" | Type: {onset_type} | Status: {validation}"
-        
         self.onset_info_label.setText(info_text)
         
     def validate_onset(self, validation):
@@ -782,91 +975,285 @@ class MotionAnnotator(QWidget):
         if self.current_onset_idx < len(self.onsets) - 1:
             self.next_onset()
             
-    def shift_onset(self, shift):
+    def start_edit_onset(self):
+        # Show edit widget and prefill with current onset/offset
         if not self.onsets:
             return
         current_onset = self.onsets[self.current_onset_idx]
-        new_frame = max(0, min(self.total_frames - 1, current_onset + shift))
-        old_onset = current_onset
-        self.onsets[self.current_onset_idx] = new_frame
-
-        # Update in curated events
+        offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
+        self.edit_onset_spinbox.setValue(current_onset)
+        self.edit_offset_spinbox.setValue(offset)
+        self.edit_widget.show()
+    def finish_edit_onset(self):
+        # Update onset/offset, set validation to 'edited', update plot and status
+        if not self.onsets:
+            return
+        new_onset = self.edit_onset_spinbox.value()
+        new_offset = self.edit_offset_spinbox.value()
+        old_onset = self.onsets[self.current_onset_idx]
+        # Remove old onset and add new one
+        self.onsets[self.current_onset_idx] = new_onset
+        self.onset_types[new_onset] = self.onset_types.pop(old_onset, 'unknown')
+        self.timeline_canvas.event_offsets[new_onset] = new_offset
+        if old_onset in self.timeline_canvas.event_offsets:
+            del self.timeline_canvas.event_offsets[old_onset]
+        # Update curated_events
         for event_type, events in self.curated_events.items():
             for event in events:
                 if event[0] == old_onset:
-                    event[0] = new_frame
-                    self.onset_types[new_frame] = self.onset_types.pop(old_onset, event_type)
-                    # Mark as edited if event_status exists
-                    if hasattr(self, 'event_status'):
-                        self.event_status[new_frame] = 0.5
-                    break
-
+                    event[0] = new_onset
+                    event[1] = new_offset
+        # Set validation to 'edited'
+        self.timeline_canvas.onset_validations[new_onset] = 'edited'
+        if old_onset in self.timeline_canvas.onset_validations:
+            del self.timeline_canvas.onset_validations[old_onset]
+        # Set performance to 0.5
+        if hasattr(self, 'event_status'):
+            self.event_status[new_onset] = 0.5
+            if old_onset in self.event_status:
+                del self.event_status[old_onset]
+        # Hide edit widget
+        self.edit_widget.hide()
+        # Sort onsets and update index
+        self.onsets = sorted(self.onsets)
+        self.current_onset_idx = self.onsets.index(new_onset)
         # Redraw plot and update UI
-        self.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
-        self.goto_onset(self.onsets.index(new_frame))
+        self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+        self.update_onset_info()
+        self.update_performance_display()
 
     def update_performance_display(self):
-        metrics = self.performance_metrics
-        total = metrics['true_positives'] + metrics['false_positives']
-        if total > 0:
-            precision = metrics['true_positives'] / total if total > 0 else 0
+        # New: Score is 1 for accepted, -1 for rejected, 0.5 for edited, 0 for pending/manually added
+        scores = []
+        for onset in self.onsets:
+            status = self.timeline_canvas.onset_validations.get(onset, 'pending')
+            if status == 'accepted':
+                scores.append(1)
+            elif status == 'rejected':
+                scores.append(-1)
+            elif status == 'edited':
+                scores.append(0.5)
+            elif status == 'manually added':
+                scores.append(0)
+            else:
+                scores.append(0)
+        if scores:
+            avg_score = sum(scores) / len(scores)
         else:
-            precision = 0
+            avg_score = 0
         display_text = f"""
-Performance Metrics:
-- True Positives: {metrics['true_positives']}
-- False Positives: {metrics['false_positives']}
-- Precision: {precision:.3f}
+Performance Score:
+- Average Score: {avg_score:.3f}
+(accepted=1, rejected=-1, edited=0.5, pending=0, manually added=0)
         """
         self.metrics_text.setText(display_text.strip())
         
-    def save_curated_onsets(self):
+    # Removed save_curated_onsets() - functionality merged into save_and_export_validation()
+            
+    def save_and_export_validation(self):
+        """Combined function to save validation data, performance metrics, and create comparison plot"""
         if not self.curated_events:
             QMessageBox.warning(self, "Warning", "No onsets to save")
             return
-            
-        # Create corrected onsets based on validation
-        corrected_events = {}
-        
+
+        # Create a flat list of events with 5 columns each
+        export_events = []
         for event_type, events in self.curated_events.items():
-            corrected_events[event_type] = []
-            for onset, _ in events:
-                validation = self.timeline_canvas.onset_validations.get(onset, 'pending')
-                offset = self.timeline_canvas.event_offsets.get(onset, onset)
-                
-                if validation == 'accepted':
-                    corrected_events[event_type].append([onset, offset, 1])  # Include offset
-                elif validation == 'rejected':
-                    corrected_events[event_type].append([onset, offset, 0])
+            for event in events:
+                onset = event[0]
+                offset = event[1] if len(event) > 1 else onset
+                status = self.timeline_canvas.onset_validations.get(onset, 'pending')
+                if status == 'accepted':
+                    score = 1
+                elif status == 'rejected':
+                    score = -1
+                elif status == 'edited':
+                    score = 0.5
+                elif status == 'manually added':
+                    score = 0
                 else:
-                    # Keep pending onsets as is
-                    corrected_events[event_type].append([onset, offset, 1])
-                    
-        # Save to file
-        fname, _ = QFileDialog.getSaveFileName(self, 'Save Curated Onsets', '', 'JSON (*.json)')
+                    score = 0
+                export_events.append([onset, offset, event_type, status, score])
+
+        # Save to CSV file
+        fname, _ = QFileDialog.getSaveFileName(self, 'Save and Export Validation', '', 'CSV (*.csv)')
         if fname:
-            with open(fname, 'w') as f:
-                json.dump(corrected_events, f, indent=2)
-            QMessageBox.information(self, "Success", f"Curated onsets saved to {fname}")
+            if not fname.endswith('.csv'):
+                fname += '.csv'
             
-    def save_performance_metrics(self):
-        metrics = self.performance_metrics
-        total = metrics['true_positives'] + metrics['false_positives']
-        if total > 0:
-            precision = metrics['true_positives'] / total if total > 0 else 0
-        else:
-            precision = 0
-        results = {
-            'performance_metrics': metrics,
-            'precision': precision,
-            'total_annotated': total
-        }
-        
-        fname, _ = QFileDialog.getSaveFileName(self, 'Save Performance Metrics', '', 'JSON (*.json)')
-        if fname:
-            with open(fname, 'w') as f:
+            # Create twitchcraft output directory
+            import os
+            base_dir = os.path.dirname(fname)
+            output_dir = os.path.join(base_dir, "twitchcraft_output")
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Get base filename without extension
+            base_name = os.path.splitext(os.path.basename(fname))[0]
+            
+            # Save CSV in output directory
+            csv_path = os.path.join(output_dir, f"{base_name}.csv")
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['onset', 'offset', 'event_type', 'status', 'score'])
+                writer.writerows(export_events)
+            
+            # Save numpy file in output directory
+            np_path = os.path.join(output_dir, f"{base_name}.npy")
+            np.save(np_path, np.array(export_events, dtype=object))
+            
+            # Save performance metrics as JSON in output directory
+            metrics_path = os.path.join(output_dir, f"{base_name}_metrics.json")
+            metrics = self.performance_metrics
+            total = metrics['true_positives'] + metrics['false_positives']
+            if total > 0:
+                precision = metrics['true_positives'] / total if total > 0 else 0
+            else:
+                precision = 0
+            results = {
+                'performance_metrics': metrics,
+                'precision': precision,
+                'total_annotated': total
+            }
+            with open(metrics_path, 'w') as f:
                 json.dump(results, f, indent=2)
-            QMessageBox.information(self, "Success", f"Performance metrics saved to {fname}")
+            
+            # Create comparison plot and save it in output directory
+            plot_path = os.path.join(output_dir, f"{base_name}_comparison_plot.png")
+            self.create_validation_comparison_plot(export_events, save_path=plot_path)
+            
+            # Show success message with all saved files
+            QMessageBox.information(self, "Success", 
+                f"Validation exported successfully!\n\n"
+                f"Files saved in 'twitchcraft_output' directory:\n"
+                f"• {base_name}.csv (CSV data)\n"
+                f"• {base_name}.npy (NumPy data)\n"
+                f"• {base_name}_metrics.json (Performance metrics)\n"
+                f"• {base_name}_comparison_plot.png (Comparison plot)\n\n"
+                f"Directory: {output_dir}")
+            
+    def create_validation_comparison_plot(self, export_events, save_path=None):
+        """Create a comparison plot showing original vs validated motion energy classification"""
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+        
+        # Calculate statistics
+        accepted_count = sum(1 for event in export_events if event[3] == 'accepted')
+        edited_count = sum(1 for event in export_events if event[3] == 'edited')
+        rejected_count = sum(1 for event in export_events if event[3] == 'rejected')
+        manually_added_count = sum(1 for event in export_events if event[3] == 'manually added')
+        pending_count = sum(1 for event in export_events if event[3] == 'pending')
+        
+        total_events = len(export_events)
+        true_positives = accepted_count + edited_count  # Accepted + Edited
+        false_positives = rejected_count  # Rejected
+        
+        # Check if motion_energy exists
+        if self.motion_energy is None:
+            QMessageBox.warning(self, "Warning", "No motion energy data available for comparison plot")
+            return
+            
+        # Create the comparison plot
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
+        
+        # Top subplot: Original classification (all events as accepted)
+        ax1.plot(np.arange(len(self.motion_energy)), self.motion_energy, color='blue', linewidth=1, alpha=0.7)
+        
+        # Plot all original events as accepted (purple for twitch, yellow for active)
+        for event in export_events:
+            onset, offset, event_type, status, score = event
+            if event_type == 'twitch':
+                ax1.axvspan(onset, offset, color='purple', alpha=0.6)
+            elif event_type == 'active':
+                ax1.axvspan(onset, offset, color='yellow', alpha=0.6)
+        
+        ax1.set_title('Original Motion Energy Classification (All Events)', fontsize=14, fontweight='bold')
+        ax1.set_ylabel('Motion Energy', fontsize=12)
+        ax1.set_xlim(0, len(self.motion_energy))
+        ax1.set_ylim(0, max(self.motion_energy) * 1.1)
+        ax1.grid(True, alpha=0.3)
+        
+        # Bottom subplot: Validated classification (with validation markers)
+        ax2.plot(np.arange(len(self.motion_energy)), self.motion_energy, color='blue', linewidth=1, alpha=0.7)
+        
+        # Plot events with validation status
+        for event in export_events:
+            onset, offset, event_type, status, score = event
+            
+            # Set alpha based on validation status
+            if status == 'accepted':
+                alpha = 1.0
+            elif status == 'edited':
+                alpha = 0.8
+            elif status == 'rejected':
+                alpha = 0.3
+            elif status == 'manually added':
+                alpha = 0.5
+            else:  # pending
+                alpha = 0.4
+                
+            if event_type == 'twitch':
+                ax2.axvspan(onset, offset, color='purple', alpha=alpha)
+            elif event_type == 'active':
+                ax2.axvspan(onset, offset, color='yellow', alpha=alpha)
+        
+        # Add validation markers
+        for event in export_events:
+            onset, offset, event_type, status, score = event
+            if status == 'accepted':
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
+            elif status == 'rejected':
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
+            elif status == 'edited':
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='orange', markersize=6)
+            elif status == 'manually added':
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='blue', markersize=6)
+        
+        ax2.set_title('Validated Motion Energy Classification', fontsize=14, fontweight='bold')
+        ax2.set_xlabel('Frame', fontsize=12)
+        ax2.set_ylabel('Motion Energy', fontsize=12)
+        ax2.set_xlim(0, len(self.motion_energy))
+        ax2.set_ylim(0, max(self.motion_energy) * 1.2)
+        ax2.grid(True, alpha=0.3)
+        
+        # Add legend
+        legend_elements = [
+            Line2D([0], [0], color='purple', alpha=0.6, linewidth=10, label='Twitch'),
+            Line2D([0], [0], color='yellow', alpha=0.6, linewidth=10, label='Active'),
+            Line2D([0], [0], marker='o', color='green', markersize=8, label='Accepted', linestyle=''),
+            Line2D([0], [0], marker='o', color='red', markersize=8, label='Rejected', linestyle=''),
+            Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited', linestyle=''),
+            Line2D([0], [0], marker='o', color='blue', markersize=8, label='Manually Added', linestyle='')
+        ]
+        ax2.legend(handles=legend_elements, loc='upper right', fontsize=10)
+        
+        plt.tight_layout()
+        
+        # Show statistics in a text box
+        stats_text = f"""
+Validation Statistics:
+- Total Events: {total_events}
+- Accepted: {accepted_count} ({accepted_count/total_events*100:.1f}%)
+- Edited: {edited_count} ({edited_count/total_events*100:.1f}%)
+- Rejected: {rejected_count} ({rejected_count/total_events*100:.1f}%)
+- Manually Added: {manually_added_count} ({manually_added_count/total_events*100:.1f}%)
+- Pending: {pending_count} ({pending_count/total_events*100:.1f}%)
+
+Performance Metrics:
+- True Positives (Accepted + Edited): {true_positives} ({true_positives/total_events*100:.1f}%)
+- False Positives (Rejected): {false_positives} ({false_positives/total_events*100:.1f}%)
+- Precision: {true_positives/(true_positives+false_positives)*100:.1f}% (if no pending/manually added)
+        """
+        
+        # Add statistics text box
+        plt.figtext(0.02, 0.02, stats_text, fontsize=10, bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgray", alpha=0.8))
+        
+        # Save the plot if save_path is provided
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+        plt.show()
+            
+    # Removed save_performance_metrics() - functionality merged into save_and_export_validation()
 
     def load_framewise_table(self, fname):
         import pandas as pd
@@ -934,6 +1321,66 @@ Performance Metrics:
                 self.play()
         else:
             super().keyPressEvent(event)
+
+    def zoom_in_timeline(self):
+        # Zoom in on the x-axis by a factor of 2, centered on current frame
+        ax = self.timeline_canvas.ax
+        xlim = ax.get_xlim()
+        center = self.timeline_canvas.current_frame
+        width = xlim[1] - xlim[0]
+        new_width = width / 2
+        new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
+        ax.set_xlim(new_xlim)
+        self.timeline_canvas.draw()
+    def zoom_out_timeline(self):
+        # Zoom out on the x-axis by a factor of 2, centered on current frame
+        ax = self.timeline_canvas.ax
+        xlim = ax.get_xlim()
+        center = self.timeline_canvas.current_frame
+        width = xlim[1] - xlim[0]
+        new_width = width * 2
+        new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
+        ax.set_xlim(new_xlim)
+        self.timeline_canvas.draw()
+
+    def reset_zoom_timeline(self):
+        # Reset the x and y axis to initial state (full view)
+        ax = self.timeline_canvas.ax
+        ax.set_xlim(0, max(self.timeline_canvas.total_frames, 1000))
+        ax.set_ylim(0, 1.2)
+        self.timeline_canvas.draw()
+
+    def zoom_in_video(self):
+        """Zoom in on the video"""
+        self.video_zoom_factor = min(self.video_zoom_factor * 1.2, 3.0)  # Max 3x zoom
+        if self.cap is not None:
+            self.show_frame(self.current_frame)
+            
+    def zoom_out_video(self):
+        """Zoom out on the video"""
+        self.video_zoom_factor = max(self.video_zoom_factor / 1.2, 0.3)  # Min 0.3x zoom
+        if self.cap is not None:
+            self.show_frame(self.current_frame)
+            
+    def reset_video_zoom(self):
+        """Reset video zoom to original size"""
+        self.video_zoom_factor = 1.0
+        if self.cap is not None:
+            self.show_frame(self.current_frame)
+
+    def update_onset_status(self):
+        """Update the onset status bar with current frame info"""
+        onset_type = self.onset_types.get(self.current_frame, None)
+        if onset_type:
+            self.onset_status_label.setText(f"Frame {self.current_frame}: {onset_type.upper()} ONSET")
+            # Color code based on onset type
+            if onset_type == 'twitch':
+                self.onset_status_label.setStyleSheet("background-color: purple; color: white; padding: 5px; border: 1px solid gray; font-weight: bold;")
+            elif onset_type == 'active':
+                self.onset_status_label.setStyleSheet("background-color: yellow; color: black; padding: 5px; border: 1px solid gray; font-weight: bold;")
+        else:
+            self.onset_status_label.setText(f"Frame {self.current_frame}: No onset")
+            self.onset_status_label.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
