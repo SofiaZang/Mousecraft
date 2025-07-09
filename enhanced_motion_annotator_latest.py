@@ -109,11 +109,12 @@ class DraggableTimeline(FigureCanvas):
                 continue
             # Compute score for color logic
             score = 0
-            if validation == 'edited' and hasattr(self, 'edit_sub_status') and onset in self.edit_sub_status:
-                if self.edit_sub_status[onset] == 'edit_val':
-                    score = 1
+            if validation == 'edited':
+                # Check if this edited event has a score in event_status
+                if hasattr(self, 'event_status') and onset in self.event_status:
+                    score = self.event_status[onset]
                 else:
-                    score = 0.5
+                    score = 0.5  # Default for edited events
             elif validation == 'accepted':
                 score = 1
             elif validation == 'rejected':
@@ -132,7 +133,7 @@ class DraggableTimeline(FigureCanvas):
             elif validation == 'manually added':
                 color = '#00CED1'  # Turquoise blue for manually added events
             else:
-                color = 'gray'
+                color = 'gray'  # Fallback for any other cases
             self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
 
         self.ax.set_xlim(0, max(self.total_frames, 1000))
@@ -848,7 +849,10 @@ class MotionAnnotator(QWidget):
         offset = self.offset_spinbox.value()
         event_type = self.event_type_combo.currentText()
         if onset >= offset:
-            QMessageBox.warning(self, "Warning", "Onset must be less than offset")
+            QMessageBox.warning(self, "Invalid Event", 
+                f"Offset frame ({offset}) must be greater than onset frame ({onset}).\n\n"
+                f"An event must have a duration of at least 1 frame.\n"
+                f"Please set the offset to a frame number higher than {onset}.")
             return
         # Vérifie si cet onset existe déjà pour éviter les doublons
         if onset in self.onsets:
@@ -1720,7 +1724,8 @@ Performance Score:
             QMessageBox.information(self, "Undo", "Nothing to undo!")
             return
         action = self.undo_stack.pop()
-        # Cas ajout manuel : ne toucher qu'à l'événement ajouté
+        
+        # Cas ajout manuel : supprimer l'événement ajouté
         if isinstance(action, tuple) and len(action) == 4 and action[0] == 'add_manual':
             _, onset, event_type, offset = action
             # Remove from timeline
@@ -1743,7 +1748,77 @@ Performance Score:
             self.redraw()
             QMessageBox.information(self, "Event deleted", "This manually added event has been successfully deleted.")
             return
-        # ... reste du code inchangé pour les autres types d'undo ...
+            
+        # Cas édition d'onset : restaurer l'onset et offset précédents
+        if isinstance(action, tuple) and len(action) == 6:
+            new_onset, prev_status, old_onset, orig_onset, old_offset, orig_offset = action
+            # Restore old onset and offset
+            if new_onset in self.onsets:
+                idx = self.onsets.index(new_onset)
+                self.onsets[idx] = old_onset
+            # Restore event type
+            event_type = self.onset_types.get(new_onset, '')
+            if new_onset in self.onset_types:
+                del self.onset_types[new_onset]
+            self.onset_types[old_onset] = event_type
+            # Restore offset
+            if new_onset in self.timeline_canvas.event_offsets:
+                del self.timeline_canvas.event_offsets[new_onset]
+            self.timeline_canvas.event_offsets[old_onset] = old_offset
+            # Restore validation status
+            if new_onset in self.timeline_canvas.onset_validations:
+                del self.timeline_canvas.onset_validations[new_onset]
+            self.timeline_canvas.onset_validations[old_onset] = prev_status
+            # Restore original mappings
+            self.original_onsets[old_onset] = orig_onset
+            if new_onset in self.original_onsets:
+                del self.original_onsets[new_onset]
+            self.original_offsets[old_onset] = orig_offset
+            # Update curated events
+            for event_type, events in self.curated_events.items():
+                for event in events:
+                    if event[0] == new_onset:
+                        event[0] = old_onset
+                        event[1] = old_offset
+            # Remove from edited_onsets
+            if hasattr(self, 'edited_onsets') and new_onset in self.edited_onsets:
+                del self.edited_onsets[new_onset]
+            # Remove from event_status
+            if hasattr(self, 'event_status') and new_onset in self.event_status:
+                del self.event_status[new_onset]
+            # Sort onsets
+            self.onsets = sorted(self.onsets)
+            # Update current index
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                if old_onset in self.filtered_onsets:
+                    self.current_onset_idx = self.filtered_onsets.index(old_onset)
+            else:
+                if old_onset in self.onsets:
+                    self.current_onset_idx = self.onsets.index(old_onset)
+            # Refresh view
+            self.update_onset_filter()
+            self.update_onset_info()
+            self.redraw()
+            QMessageBox.information(self, "Undo", f"Restored onset from {new_onset} to {old_onset}")
+            return
+            
+        # Cas validation simple (accept/reject) : restaurer le statut précédent
+        if isinstance(action, tuple) and len(action) == 2:
+            onset, prev_status = action
+            # Restore previous validation status
+            self.timeline_canvas.onset_validations[onset] = prev_status
+            # Remove from event_status if it was there
+            if hasattr(self, 'event_status') and onset in self.event_status:
+                del self.event_status[onset]
+            # Refresh view
+            self.update_onset_filter()
+            self.update_onset_info()
+            self.redraw()
+            QMessageBox.information(self, "Undo", f"Restored status to '{prev_status}' for onset {onset}")
+            return
+            
+        # Cas par défaut
+        QMessageBox.warning(self, "Undo", "Unknown action type, cannot undo.")
 
     def accept_and_toggle_offset(self):
         # Toggle offset menu: ouvrir/fermer sans jamais changer le statut
