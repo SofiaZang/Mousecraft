@@ -104,15 +104,16 @@ class DraggableTimeline(FigureCanvas):
         # Add validation markers as bullet points on top
         for onset in self.onsets:
             validation = self.onset_validations.get(onset, 'pending')
+            score = self.event_status.get(onset, 0)
             if validation == 'accepted':
-                # Green bullet for accepted
                 self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
             elif validation == 'rejected':
-                # Red bullet for rejected
                 self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
             elif validation == 'edited':
-                # Orange bullet for edited
-                self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='orange', markersize=6)
+                if score == 1:
+                    self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
+                else:
+                    self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='orange', markersize=6)
 
         self.ax.set_xlim(0, max(self.total_frames, 1000))
         self.ax.set_ylim(0, max(self.motion_energy) * 1.2)  # Increased ylim to accommodate bullets
@@ -230,6 +231,11 @@ class MotionAnnotator(QWidget):
         self.awaiting_offset_validation = False
         self.current_offset_for_validation = None
         self.undo_stack = []  # Pile d'historique pour undo
+
+        # 1. In __init__ of MotionAnnotator, add storage for original onsets
+        self.original_onsets = {}  # Maps current onset to original input onset
+        # 1. In __init__, add storage for original offsets
+        self.original_offsets = {}  # Maps current onset to original input offset
 
         self.init_ui()
         self.setup_timer()
@@ -651,6 +657,8 @@ class MotionAnnotator(QWidget):
             for onset, _ in events:
                 self.onsets.append(onset)
                 self.onset_types[onset] = event_type
+                self.original_onsets[onset] = onset  # Track original
+                self.original_offsets[onset] = onset  # Track original offset
                 
         self.onsets = sorted(self.onsets)
         self.current_onset_idx = 0
@@ -713,6 +721,8 @@ class MotionAnnotator(QWidget):
                 self.onset_types[onset] = 'active'
                 self.timeline_canvas.event_offsets[onset] = offset
                 self.event_status[onset] = 1  # default to accepted for now
+                self.original_onsets[onset] = onset
+                self.original_offsets[onset] = offset
                 print(f"Added active event: onset={onset}, offset={offset}")
                 
             # Process twitch events
@@ -728,6 +738,8 @@ class MotionAnnotator(QWidget):
                 self.onset_types[onset] = 'twitch'
                 self.timeline_canvas.event_offsets[onset] = offset
                 self.event_status[onset] = 1
+                self.original_onsets[onset] = onset
+                self.original_offsets[onset] = offset
                 print(f"Added twitch event: onset={onset}, offset={offset}")
                 
             # Process complex motion events
@@ -741,6 +753,9 @@ class MotionAnnotator(QWidget):
                 self.onsets.append(onset)
                 self.onset_types[onset] = 'complex'
                 self.timeline_canvas.event_offsets[onset] = offset
+                self.event_status[onset] = 1
+                self.original_onsets[onset] = onset
+                self.original_offsets[onset] = offset
                 
             # Sort onsets
             self.onsets = sorted(self.onsets)
@@ -1134,6 +1149,8 @@ class MotionAnnotator(QWidget):
             old_onset = self.onsets[self.current_onset_idx]
             self.onsets[self.current_onset_idx] = new_onset
         event_type = self.onset_types[old_onset]
+        # --- Capture the old offset before any changes ---
+        old_offset_before_edit = self.timeline_canvas.event_offsets.get(old_onset, old_onset)
         del self.onset_types[old_onset]
         self.onset_types[new_onset] = event_type
         self.timeline_canvas.event_offsets[new_onset] = new_offset
@@ -1150,16 +1167,24 @@ class MotionAnnotator(QWidget):
         if new_onset not in self.edited_onsets:
             self.edited_onsets[new_onset] = []
         # Ajoute l'ancien onset/offset à la liste
-        self.edited_onsets[new_onset].append((old_onset, self.timeline_canvas.event_offsets.get(old_onset, old_onset)))
-        # Set validation to 'edited' uniquement si on passe par finish_edit_onset
+        self.edited_onsets[new_onset].append((old_onset, old_offset_before_edit))
+        # Find the original onset for this event
+        orig_onset = self.original_onsets.get(old_onset, old_onset)
+        shift = abs(new_onset - orig_onset)
+        # Update original_onsets mapping
+        self.original_onsets[new_onset] = orig_onset
+        if old_onset in self.original_onsets:
+            del self.original_onsets[old_onset]
+        # Set validation and score based on shift
         prev_status = self.timeline_canvas.onset_validations.get(new_onset, 'pending')
         if prev_status != 'edited':
-            self.undo_stack.append((new_onset, prev_status))
+            self.undo_stack.append((new_onset, prev_status, old_onset, orig_onset, old_offset_before_edit, self.original_offsets.get(old_onset, old_offset_before_edit)))
         self.timeline_canvas.onset_validations[new_onset] = 'edited'
-        if old_onset in self.timeline_canvas.onset_validations:
-            del self.timeline_canvas.onset_validations[old_onset]
         if hasattr(self, 'event_status'):
-            self.event_status[new_onset] = 0.5
+            if shift < 6:
+                self.event_status[new_onset] = 1
+            else:
+                self.event_status[new_onset] = 0.5
             if old_onset in self.event_status:
                 del self.event_status[old_onset]
         self.edit_widget.hide()
@@ -1678,8 +1703,43 @@ Performance Score:
             print("Undo stack is empty!")
             QMessageBox.information(self, "Undo", "Nothing to undo!")
             return
-        onset, prev_status = self.undo_stack.pop()
-        print(f"Undo: onset={onset}, prev_status={prev_status}")
+        last = self.undo_stack.pop()
+        if len(last) == 6:
+            onset, prev_status, old_onset, orig_onset, old_offset_before_edit, orig_offset = last
+            # Undo edit: revert onset to old_onset, restore original_onsets, event_status, etc.
+            # Remove new_onset, restore old_onset
+            if onset in self.onsets:
+                idx = self.onsets.index(onset)
+                self.onsets[idx] = old_onset
+                self.onsets = sorted(self.onsets)
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                if onset in self.filtered_onsets:
+                    idx = self.filtered_onsets.index(onset)
+                    self.filtered_onsets[idx] = old_onset
+                    self.filtered_onsets = sorted(self.filtered_onsets)
+            self.onset_types[old_onset] = self.onset_types.pop(onset)
+            self.timeline_canvas.event_offsets[old_onset] = old_offset_before_edit
+            if onset in self.timeline_canvas.event_offsets:
+                del self.timeline_canvas.event_offsets[onset]
+            self.original_onsets[old_onset] = orig_onset
+            if onset in self.original_onsets:
+                del self.original_onsets[onset]
+            self.original_offsets[old_onset] = orig_offset
+            if onset in self.original_offsets:
+                del self.original_offsets[onset]
+            if hasattr(self, 'event_status'):
+                self.event_status[old_onset] = 0
+                if onset in self.event_status:
+                    del self.event_status[onset]
+            self.timeline_canvas.onset_validations[old_onset] = prev_status
+            if onset in self.timeline_canvas.onset_validations:
+                del self.timeline_canvas.onset_validations[onset]
+            self.current_onset_idx = self.onsets.index(old_onset)
+            self.goto_onset(self.current_onset_idx)
+            self.redraw()
+            return
+        # fallback to previous undo logic
+        onset, prev_status = last
         self.timeline_canvas.onset_validations[onset] = prev_status
         if onset in self.onsets:
             self.current_onset_idx = self.onsets.index(onset)
