@@ -283,13 +283,9 @@ class MotionAnnotator(QWidget):
         self.play_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.pause_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.stop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.play_btn.setMinimumHeight(36)
-        self.pause_btn.setMinimumHeight(36)
-        self.stop_btn.setMinimumHeight(36)
-        # Nettoyage : supprime les styles CSS contenant 'z-index' sur les boutons
-        self.pause_btn.setStyleSheet("background: rgba(255, 0, 0, 0.5);")
-        self.play_btn.setStyleSheet("background: rgba(0, 255, 0, 0.5);")
-        self.stop_btn.setStyleSheet("background: rgba(0, 0, 255, 0.5);")
+        self.play_btn.setMinimumHeight(34)
+        self.pause_btn.setMinimumHeight(34)
+        self.stop_btn.setMinimumHeight(34)
         # Diagnostic widgets recouvrants
         for child in self.findChildren(QWidget):
             if child is not self.pause_btn and child.geometry().intersects(self.pause_btn.geometry()):
@@ -1971,10 +1967,6 @@ Performance Score:
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     annotator = MotionAnnotator()
-    # 3. Visualiser la superposition de widgets
-    annotator.play_btn.setStyleSheet("background-color: rgba(0,255,0,0.3); border: 2px solid black;")
-    annotator.pause_btn.setStyleSheet("background-color: rgba(255,0,0,0.3); border: 2px solid black;")
-    annotator.stop_btn.setStyleSheet("background-color: rgba(0,0,255,0.3); border: 2px solid black;")
     # Force la mise au premier plan
     annotator.pause_btn.raise_()
     annotator.show()
