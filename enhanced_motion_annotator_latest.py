@@ -257,6 +257,9 @@ class MotionAnnotator(QWidget):
         self.original_onsets = {}  # Maps current onset to original input onset
         # 1. In __init__, add storage for original offsets
         self.original_offsets = {}  # Maps current onset to original input offset
+        
+        # Threshold for edited events score (default: 5 frames)
+        self.edit_threshold = 5
 
         self.init_ui()
         self.setup_timer()
@@ -380,9 +383,20 @@ class MotionAnnotator(QWidget):
         onset_offset_layout.addWidget(self.offset_spinbox, 1, 1)
         onset_offset_layout.addWidget(self.set_current_offset_btn, 1, 2)
         manual_layout.addLayout(onset_offset_layout)
+        
         self.add_event_btn = QPushButton("➕ Add Event")
         self.add_event_btn.clicked.connect(self.add_manual_event)
         manual_layout.addWidget(self.add_event_btn)
+        
+        # Add threshold control for edited events
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QLabel("Edit Threshold (frames):"))
+        self.edit_threshold_spinbox = QSpinBox()
+        self.edit_threshold_spinbox.setRange(1, 100)
+        self.edit_threshold_spinbox.setValue(self.edit_threshold)
+        self.edit_threshold_spinbox.valueChanged.connect(self.update_edit_threshold)
+        threshold_layout.addWidget(self.edit_threshold_spinbox)
+        manual_layout.addLayout(threshold_layout)
         manual_event_group.setLayout(manual_layout)
         left_panel.addWidget(manual_event_group)
 
@@ -843,6 +857,10 @@ class MotionAnnotator(QWidget):
         if self.offset_spinbox.value() < onset:
             self.offset_spinbox.setValue(onset)
             
+    def update_edit_threshold(self):
+        """Update the edit threshold value"""
+        self.edit_threshold = self.edit_threshold_spinbox.value()
+            
     def add_manual_event(self):
         print("add_manual_event called")
         onset = self.onset_spinbox.value()
@@ -1203,7 +1221,7 @@ class MotionAnnotator(QWidget):
             self.undo_stack.append((new_onset, prev_status, old_onset, orig_onset, old_offset_before_edit, self.original_offsets.get(old_onset, old_offset_before_edit)))
         self.timeline_canvas.onset_validations[new_onset] = 'edited'
         if hasattr(self, 'event_status'):
-            if shift < 6:
+            if shift < self.edit_threshold:
                 self.event_status[new_onset] = 1
             else:
                 self.event_status[new_onset] = 0.5
