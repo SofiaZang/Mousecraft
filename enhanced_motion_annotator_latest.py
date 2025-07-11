@@ -263,6 +263,7 @@ class MotionAnnotator(QWidget):
 
         self.init_ui()
         self.setup_timer()
+        self.unsaved_changes = False  # Track unsaved changes
         
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -862,6 +863,7 @@ class MotionAnnotator(QWidget):
         self.edit_threshold = self.edit_threshold_spinbox.value()
             
     def add_manual_event(self):
+        self.unsaved_changes = True
         print("add_manual_event called")
         onset = self.onset_spinbox.value()
         offset = self.offset_spinbox.value()
@@ -876,6 +878,19 @@ class MotionAnnotator(QWidget):
         if onset in self.onsets:
             QMessageBox.warning(self, "Warning", f"Event at frame {onset} already exists")
             return
+        # Check for overlap with existing events
+        overlapping = []
+        for existing_onset in self.onsets:
+            existing_offset = self.timeline_canvas.event_offsets.get(existing_onset, existing_onset)
+            # Overlap if intervals [onset, offset) and [existing_onset, existing_offset) intersect
+            if not (offset <= existing_onset or onset >= existing_offset):
+                overlapping.append((self.onset_types.get(existing_onset, '?'), existing_onset, existing_offset))
+        if overlapping:
+            overlap_str = "\n".join([f"- {typ} from {ons} to {off}" for typ, ons, off in overlapping])
+            msg = f"Are you sure you want to add this event? It overlaps with the following event(s):\n{overlap_str}"
+            reply = QMessageBox.question(self, "Overlap detected", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
         # Ajoute aux structures principales (une seule fois)
         self.onsets.append(onset)
         self.onset_types[onset] = event_type
@@ -1116,6 +1131,7 @@ class MotionAnnotator(QWidget):
         self.onset_info_label.setText(info_text)
         
     def validate_onset(self, validation):
+        self.unsaved_changes = True
         if not self.onsets:
             return
         # Toujours utiliser l'onset courant de la vue filtrée si disponible
@@ -1186,6 +1202,7 @@ class MotionAnnotator(QWidget):
         self.update_onset_status()  # Update status to show we're in edit mode
         self.setFocus()
     def finish_edit_onset(self):
+        self.unsaved_changes = True
         # Update only the onset frame, not the event type
         if not self.onsets:
             return
@@ -1203,6 +1220,39 @@ class MotionAnnotator(QWidget):
         event_type = self.onset_types[old_onset]
         # --- Capture the old offset before any changes ---
         old_offset_before_edit = self.timeline_canvas.event_offsets.get(old_onset, old_onset)
+        # Si seul l'offset change (onset identique)
+        if new_onset == old_onset and new_offset != old_offset_before_edit:
+            reply = QMessageBox.question(self, "Accept instead?", "Wouldn't you rather accept instead?\nIf you click Accept, the event will be validated as accepted with the new offset.", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply == QMessageBox.Yes:
+                # Appliquer la validation 'accepted' avec le nouvel offset
+                self.timeline_canvas.event_offsets[old_onset] = new_offset
+                for event_type, events in self.curated_events.items():
+                    for event in events:
+                        if event[0] == old_onset:
+                            event[1] = new_offset
+                prev_status = self.timeline_canvas.onset_validations.get(old_onset, 'pending')
+                if prev_status != 'accepted':
+                    self.undo_stack.append((old_onset, prev_status))
+                self.timeline_canvas.onset_validations[old_onset] = 'accepted'
+                self.edit_widget.hide()
+                self.accept_btn.setEnabled(True)
+                self.edit_btn.setEnabled(True)
+                self.reject_btn.setEnabled(True)
+                self.update_onset_status()
+                self.update_onset_filter()
+                self.update_onset_info()
+                self.update_performance_display()
+                self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+                # Aller à l'onset suivant
+                if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                    if self.current_onset_idx < len(self.filtered_onsets) - 1:
+                        self.goto_onset(self.current_onset_idx + 1)
+                else:
+                    if self.current_onset_idx < len(self.onsets) - 1:
+                        self.goto_onset(self.current_onset_idx + 1)
+                self.setFocus()
+                return
+            # Sinon, continuer l'édition normale (statut 'edited')
         del self.onset_types[old_onset]
         self.onset_types[new_onset] = event_type
         self.timeline_canvas.event_offsets[new_onset] = new_offset
@@ -1253,6 +1303,7 @@ class MotionAnnotator(QWidget):
         self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
         self.update_onset_info()
         self.update_performance_display()
+        # Aller à l'onset suivant après édition
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             if self.current_onset_idx < len(self.filtered_onsets) - 1:
                 self.goto_onset(self.current_onset_idx + 1)
@@ -1316,32 +1367,24 @@ Performance Score:
                     score = 0
                 export_events.append([onset, offset, event_type, status, score])
 
-        # Save to CSV file
-        fname, _ = QFileDialog.getSaveFileName(self, 'Save and Export Validation', '', 'CSV (*.csv)')
+        # Save to XLSX file only
+        fname, _ = QFileDialog.getSaveFileName(self, 'Save and Export Validation', '', 'Excel (*.xlsx)')
         if fname:
-            if not fname.endswith('.csv'):
-                fname += '.csv'
-            
-            # Create mousecraft output directory
+            if not fname.endswith('.xlsx'):
+                fname += '.xlsx'
             import os
+            import pandas as pd
             base_dir = os.path.dirname(fname)
             output_dir = os.path.join(base_dir, "mousecraft_output")
             os.makedirs(output_dir, exist_ok=True)
-            
-            # Get base filename without extension
             base_name = os.path.splitext(os.path.basename(fname))[0]
-            
-            # Save CSV in output directory
-            csv_path = os.path.join(output_dir, f"{base_name}.csv")
-            with open(csv_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['onset', 'offset', 'event_type', 'status', 'score'])
-                writer.writerows(export_events)
-            
+            # Save XLSX in output directory
+            xlsx_path = os.path.join(output_dir, f"{base_name}.xlsx")
+            df = pd.DataFrame(export_events, columns=['onset', 'offset', 'event_type', 'status', 'score'])
+            df.to_excel(xlsx_path, index=False)
             # Save numpy file in output directory
             np_path = os.path.join(output_dir, f"{base_name}.npy")
             np.save(np_path, np.array(export_events, dtype=object))
-            
             # Save performance metrics as JSON in output directory
             metrics_path = os.path.join(output_dir, f"{base_name}_metrics.json")
             metrics = self.performance_metrics
@@ -1357,20 +1400,21 @@ Performance Score:
             }
             with open(metrics_path, 'w') as f:
                 json.dump(results, f, indent=2)
-            
             # Create comparison plot and save it in output directory
             plot_path = os.path.join(output_dir, f"{base_name}_comparison_plot.png")
             self.create_validation_comparison_plot(export_events, save_path=plot_path)
-            
             # Show success message with all saved files
             QMessageBox.information(self, "Success", 
                 f"Validation exported successfully!\n\n"
                 f"Files saved in 'mousecraft_output' directory:\n"
-                f"• {base_name}.csv (CSV data)\n"
+                f"• {base_name}.xlsx (Excel data)\n"
                 f"• {base_name}.npy (NumPy data)\n"
                 f"• {base_name}_metrics.json (Performance metrics)\n"
                 f"• {base_name}_comparison_plot.png (Comparison plot)\n\n"
                 f"Directory: {output_dir}")
+            
+        # Après export, reset le flag
+        self.unsaved_changes = False
             
     def create_validation_comparison_plot(self, export_events, save_path=None):
         """Create a comparison plot showing original vs validated motion energy classification"""
@@ -1782,6 +1826,7 @@ Performance Score:
         self.update_onset_filter()  # MAJ immédiate
 
     def undo_last_action(self):
+        self.unsaved_changes = True
         if not self.undo_stack:
             QMessageBox.information(self, "Undo", "Nothing to undo!")
             return
@@ -2109,6 +2154,27 @@ Performance Score:
             f"- {os.path.splitext(os.path.basename(hf_path))[0]}.npy\n"
             f"- {os.path.basename(plot_path)}\n"
             f"- {os.path.basename(metrics_path)}")
+        # Après export, reset le flag
+        self.unsaved_changes = False
+
+    def closeEvent(self, event):
+        if getattr(self, 'unsaved_changes', False):
+            reply = QMessageBox.question(self, "Save before exit?", "Do you want to save your work before exiting?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply == QMessageBox.Yes:
+                # Ouvre le sélecteur d'export si pas déjà choisi
+                if not self.export_path_lineedit.text():
+                    self.choose_export_path()
+                    # Si l'utilisateur annule le choix du dossier, ne pas exporter
+                    if not self.export_path_lineedit.text():
+                        event.ignore()
+                        return
+                self.export_all_outputs()
+                event.accept()
+                return
+            else:
+                event.accept()
+                return
+        event.accept()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
