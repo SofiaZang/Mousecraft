@@ -448,7 +448,7 @@ class MotionAnnotator(QWidget):
         filter_layout.addWidget(self.onset_filter_combo)
         filter_layout.addWidget(QLabel("Event status"))
         self.status_filter_combo = QComboBox()
-        self.status_filter_combo.addItems(["All", "Editing", "Pending", "Accepted", "Rejected", "Manually Added"])
+        self.status_filter_combo.addItems(["All", "Edited", "Pending", "Accepted", "Rejected", "Manually Added"])
         self.status_filter_combo.currentIndexChanged.connect(self.update_onset_filter)
         filter_layout.addWidget(self.status_filter_combo)
         onset_layout.addLayout(filter_layout)
@@ -498,9 +498,9 @@ class MotionAnnotator(QWidget):
         self.edit_onset_spinbox.setRange(0, 999999)
         self.edit_offset_spinbox = QSpinBox()
         self.edit_offset_spinbox.setRange(0, 999999)
-        edit_form.addWidget(QLabel("New Onset:"))
+        edit_form.addWidget(QLabel("Onset to Offset:"))
         edit_form.addWidget(self.edit_onset_spinbox)
-        edit_form.addWidget(QLabel("New Offset:"))
+        edit_form.addWidget(QLabel("→"))
         edit_form.addWidget(self.edit_offset_spinbox)
         self.finish_edit_btn = QPushButton("Finish Edit")
         self.finish_edit_btn.clicked.connect(self.finish_edit_onset)
@@ -599,7 +599,7 @@ class MotionAnnotator(QWidget):
             import os
             parent_folder = os.path.basename(os.path.dirname(fname))
             grandparent_folder = os.path.basename(os.path.dirname(os.path.dirname(fname)))
-            self.video_folder_label.setText(f"Dossier vidéo : {grandparent_folder} / {parent_folder}")
+            self.video_folder_label.setText(f"Video folder : {grandparent_folder} / {parent_folder}")
         
     def load_motion_energy(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Load Motion Energy', '', 'CSV/Excel (*.csv *.xlsx *.npy)')
@@ -611,7 +611,7 @@ class MotionAnnotator(QWidget):
             arriere_grandparent = os.path.dirname(grandparent)
             grandparent_folder = os.path.basename(grandparent)
             arriere_grandparent_folder = os.path.basename(arriere_grandparent)
-            self.motion_energy_folder_label.setText(f"Dossier motion energy : {arriere_grandparent_folder} / {grandparent_folder}")
+            self.motion_energy_folder_label.setText(f"Motion energy folder : {arriere_grandparent_folder} / {grandparent_folder}")
             if fname.endswith('.npy'):
                 self.motion_energy = np.load(fname)
             elif fname.endswith('.csv'):
@@ -655,7 +655,7 @@ class MotionAnnotator(QWidget):
                 arriere_grandparent = os.path.dirname(grandparent)
                 grandparent_folder = os.path.basename(grandparent)
                 arriere_grandparent_folder = os.path.basename(arriere_grandparent)
-                self.motion_energy_folder_label.setText(f"Dossier classification : {arriere_grandparent_folder} / {grandparent_folder}")
+                self.motion_energy_folder_label.setText(f"Classification folder : {arriere_grandparent_folder} / {grandparent_folder}")
                 if fname.endswith('.json'):
                     self.load_json_classifications(fname)
                 else:
@@ -851,11 +851,11 @@ class MotionAnnotator(QWidget):
         self.offset_spinbox.setValue(self.current_frame)
         
     def update_offset_range(self):
-        """Update offset range to be >= onset"""
+        """Update offset range to be >= onset and set default to onset+1"""
         onset = self.onset_spinbox.value()
         self.offset_spinbox.setMinimum(onset)
-        if self.offset_spinbox.value() < onset:
-            self.offset_spinbox.setValue(onset)
+        # Set offset to onset+1 by default
+        self.offset_spinbox.setValue(onset + 1)
             
     def update_edit_threshold(self):
         """Update the edit threshold value"""
@@ -1065,26 +1065,25 @@ class MotionAnnotator(QWidget):
     def prev_onset(self):
         if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
             self.filtered_onsets = self.onsets.copy()
-        # Cherche l'onset juste avant la frame courante
-        idx = 0
-        for i, onset in enumerate(self.filtered_onsets):
-            if onset < self.current_frame:
-                idx = i
-            else:
-                break
+        if not self.filtered_onsets:
+            return
+        # Si on est au premier onset, aller au dernier (cyclique)
+        if self.current_onset_idx == 0:
+            idx = len(self.filtered_onsets) - 1
+        else:
+            idx = self.current_onset_idx - 1
         self.goto_onset(idx)
 
     def next_onset(self):
         if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
             self.filtered_onsets = self.onsets.copy()
-        # Cherche l'onset juste après la frame courante
-        idx = None
-        for i, onset in enumerate(self.filtered_onsets):
-            if onset > self.current_frame:
-                idx = i
-                break
-        if idx is None:
-            idx = len(self.filtered_onsets) - 1  # Reste sur le dernier si pas trouvé
+        if not self.filtered_onsets:
+            return
+        # Si on est au dernier onset, aller au premier (cyclique)
+        if self.current_onset_idx == len(self.filtered_onsets) - 1:
+            idx = 0
+        else:
+            idx = self.current_onset_idx + 1
         self.goto_onset(idx)
 
     def update_onset_info(self):
@@ -1137,6 +1136,7 @@ class MotionAnnotator(QWidget):
                 self.current_offset_for_validation = offset
                 self.goto_offset_for_validation(offset)
                 self.update_onset_filter()  # MAJ immédiate
+                self.setFocus()
                 return
         elif validation == 'edited':
             self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
@@ -1153,17 +1153,24 @@ class MotionAnnotator(QWidget):
             self.accept_btn.setEnabled(False)
             self.reject_btn.setEnabled(False)
             self.edit_btn.setEnabled(False)
+            self.setFocus()
             return
         if self.current_onset_idx < len(self.onsets) - 1:
             self.next_onset()
+        self.setFocus()  # Restore focus to main window
 
     def start_edit_onset(self):
         # Si le widget d'édition est déjà visible, le fermer
         if self.edit_widget.isVisible():
             self.edit_widget.hide()
+            self.accept_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.setFocus()
             return
         # Sinon, comportement normal : ouvrir et préremplir
         if not self.onsets:
+            self.setFocus()
             return
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             current_onset = self.filtered_onsets[self.current_onset_idx]
@@ -1173,6 +1180,11 @@ class MotionAnnotator(QWidget):
         self.edit_onset_spinbox.setValue(current_onset)
         self.edit_offset_spinbox.setValue(offset)
         self.edit_widget.show()
+        self.accept_btn.setEnabled(False)
+        self.edit_btn.setEnabled(True)
+        self.reject_btn.setEnabled(False)
+        self.update_onset_status()  # Update status to show we're in edit mode
+        self.setFocus()
     def finish_edit_onset(self):
         # Update only the onset frame, not the event type
         if not self.onsets:
@@ -1228,6 +1240,10 @@ class MotionAnnotator(QWidget):
             if old_onset in self.event_status:
                 del self.event_status[old_onset]
         self.edit_widget.hide()
+        self.accept_btn.setEnabled(True)
+        self.edit_btn.setEnabled(True)
+        self.reject_btn.setEnabled(True)
+        self.update_onset_status()  # Update status when exiting edit mode
         self.onsets = sorted(self.onsets)
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             self.filtered_onsets = sorted(self.filtered_onsets)
@@ -1245,6 +1261,7 @@ class MotionAnnotator(QWidget):
                 self.goto_onset(self.current_onset_idx + 1)
         # Mise à jour du filtre et du compteur après édition
         self.update_onset_filter()
+        self.setFocus()  # Restore focus to main window
 
     def update_performance_display(self):
         # New: Score is 1 for accepted, -1 for rejected, 0.5 for edited, 0 for pending/manually added
@@ -1421,7 +1438,7 @@ Performance Score:
             elif event_type == 'active':
                 ax2.axvspan(onset, offset, color='yellow', alpha=alpha)
         
-        # Add validation markers
+        # Add validation markers with same logic as timeline
         for event in export_events:
             onset, offset, event_type, status, score = event
             if status == 'accepted':
@@ -1429,9 +1446,21 @@ Performance Score:
             elif status == 'rejected':
                 ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
             elif status == 'edited':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='orange', markersize=6)
+                # Use same logic as timeline for edited events
+                if hasattr(self, 'event_status') and onset in self.event_status:
+                    score = self.event_status[onset]
+                else:
+                    score = 0.5  # Default for edited events
+                
+                if score == 1:
+                    color = 'green'
+                elif score == 0.5:
+                    color = 'orange'
+                else:
+                    color = 'orange'  # Fallback
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
             elif status == 'manually added':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='#00bcd4', markersize=6)
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='#00CED1', markersize=6)
         
         ax2.set_title('Validated Motion Energy Classification', fontsize=14, fontweight='bold')
         ax2.set_xlabel('Frame', fontsize=12)
@@ -1446,8 +1475,9 @@ Performance Score:
             Line2D([0], [0], color='yellow', alpha=0.6, linewidth=10, label='Active'),
             Line2D([0], [0], marker='o', color='green', markersize=8, label='Accepted', linestyle=''),
             Line2D([0], [0], marker='o', color='red', markersize=8, label='Rejected', linestyle=''),
-            Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited', linestyle=''),
-            Line2D([0], [0], marker='o', color='#00bcd4', markersize=8, label='Manually Added', linestyle='')
+            Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited (orange)', linestyle=''),
+            Line2D([0], [0], marker='o', color='green', markersize=8, label='Edited (green)', linestyle=''),
+            Line2D([0], [0], marker='o', color='#00CED1', markersize=8, label='Manually Added', linestyle='')
         ]
         fig.legend(handles=legend_elements, bbox_to_anchor=(0.01, 0.99), loc='upper left', ncol=1, fontsize=11, borderaxespad=0.)
         
@@ -1564,29 +1594,36 @@ Performance Score:
         # Zoom in on the x-axis by a factor of 2, centered on current frame
         ax = self.timeline_canvas.ax
         xlim = ax.get_xlim()
-        center = self.timeline_canvas.current_frame
+        center = self.current_frame  # Use self.current_frame instead of timeline_canvas.current_frame
         width = xlim[1] - xlim[0]
         new_width = width / 2
         new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
         ax.set_xlim(new_xlim)
         self.timeline_canvas.draw()
+        self.timeline_canvas.flush_events()  # Force immediate update
+        
     def zoom_out_timeline(self):
         # Zoom out on the x-axis by a factor of 2, centered on current frame
         ax = self.timeline_canvas.ax
         xlim = ax.get_xlim()
-        center = self.timeline_canvas.current_frame
+        center = self.current_frame  # Use self.current_frame instead of timeline_canvas.current_frame
         width = xlim[1] - xlim[0]
         new_width = width * 2
         new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
         ax.set_xlim(new_xlim)
         self.timeline_canvas.draw()
+        self.timeline_canvas.flush_events()  # Force immediate update
 
     def reset_zoom_timeline(self):
         # Reset the x and y axis to initial state (full view)
         ax = self.timeline_canvas.ax
         ax.set_xlim(0, max(self.timeline_canvas.total_frames, 1000))
-        ax.set_ylim(0, 1.2)
+        if hasattr(self, 'motion_energy') and self.motion_energy is not None:
+            ax.set_ylim(0, max(self.motion_energy) * 1.2)
+        else:
+            ax.set_ylim(0, 1.2)
         self.timeline_canvas.draw()
+        self.timeline_canvas.flush_events()  # Force immediate update
 
     def zoom_in_video(self):
         """Zoom in on the video"""
@@ -1615,6 +1652,10 @@ Performance Score:
             if offset == self.current_frame:
                 is_offset = True
                 break
+        
+        # Check if we're in edit mode
+        is_editing = hasattr(self, 'edit_widget') and self.edit_widget.isVisible()
+        
         if onset_type:
             self.onset_status_label.setText(f"Frame {self.current_frame}: {onset_type.upper()} ONSET")
             # Color code based on onset type
@@ -1624,7 +1665,10 @@ Performance Score:
                 self.onset_status_label.setStyleSheet("background-color: yellow; color: black; padding: 5px; border: 1px solid gray; font-weight: bold;")
         elif is_offset:
             # Affiche l'offset en rouge
-            self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET</span>")
+            if is_editing:
+                self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET (EDITING)</span>")
+            else:
+                self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET</span>")
             self.onset_status_label.setStyleSheet("background-color: #ffcccc; color: #ff4444; padding: 5px; border: 1px solid gray; font-weight: bold;")
         else:
             self.onset_status_label.setText(f"Frame {self.current_frame}: No onset")
@@ -1792,10 +1836,10 @@ Performance Score:
             if new_onset in self.original_onsets:
                 del self.original_onsets[new_onset]
             self.original_offsets[old_onset] = orig_offset
-            # Update curated events
+            # Update curated events (force offset update for all matching onsets)
             for event_type, events in self.curated_events.items():
                 for event in events:
-                    if event[0] == new_onset:
+                    if event[0] == new_onset or event[0] == old_onset:
                         event[0] = old_onset
                         event[1] = old_offset
             # Remove from edited_onsets
@@ -1817,7 +1861,9 @@ Performance Score:
             self.update_onset_filter()
             self.update_onset_info()
             self.redraw()
-            QMessageBox.information(self, "Undo", f"Restored onset from {new_onset} to {old_onset}")
+            # Show both onset and offset in the message
+            new_offset_val = self.timeline_canvas.event_offsets.get(new_onset, '?')
+            QMessageBox.information(self, "Undo", f"Restored {new_onset} to {new_offset_val}, from {old_onset} to {old_offset}")
             return
             
         # Cas validation simple (accept/reject) : restaurer le statut précédent
@@ -1842,14 +1888,17 @@ Performance Score:
         # Toggle offset menu: ouvrir/fermer sans jamais changer le statut
         if self.offset_validation_widget.isVisible():
             self.offset_validation_widget.hide()
-            if hasattr(self, 'offset_edit_widget') and self.offset_edit_widget is not None:
-                self.offset_edit_widget.setParent(None)
-                self.offset_edit_widget.deleteLater()
-                self.offset_edit_widget = None
-            self.setFocus()  # Focus principal après accept
+            self.accept_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.setFocus()
             return
+        # Sinon, ouvrir le menu et désactiver les autres boutons
         self.offset_validation_widget.show()
-        self.setFocus()  # Focus principal après accept
+        self.accept_btn.setEnabled(True)
+        self.edit_btn.setEnabled(False)
+        self.reject_btn.setEnabled(False)
+        self.setFocus()
 
     def open_accept_menu(self, onset):
         self.current_onset_for_menu = onset
@@ -1867,6 +1916,7 @@ Performance Score:
         self.offset_validation_widget.hide()
         self.update_buttons_state(onset)
         self.redraw()
+        self.setFocus()  # Restore focus to main window
 
     def close_accept_menu(self):
         self.menu_open = False
