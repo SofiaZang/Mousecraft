@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QFileDialog, QSpinBox, QDoubleSpinBox, 
     QGroupBox, QGridLayout, QTextEdit, QComboBox, QCheckBox,
-    QMessageBox, QProgressBar, QSplitter, QLineEdit, QSizePolicy
+    QMessageBox, QProgressBar, QSplitter, QLineEdit, QSizePolicy,
+    QDialog
 )
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon, QFont, QFontDatabase
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
@@ -478,19 +479,29 @@ class MotionAnnotator(QWidget):
         validation_layout = QHBoxLayout()
         self.accept_btn = QPushButton("✓ Accept")
         self.reject_btn = QPushButton("✗ Reject")
-        # Add Edit button
         self.edit_btn = QPushButton("✎ Edit")
+        self.split_btn = QPushButton("Split ✂️")
         self.accept_btn.clicked.connect(self.accept_and_toggle_offset)
         self.reject_btn.clicked.connect(lambda: self.validate_onset('rejected'))
         self.edit_btn.clicked.connect(self.start_edit_onset)
+        self.split_btn.clicked.connect(self.open_split_dialog)
         validation_layout.addWidget(self.accept_btn)
         validation_layout.addWidget(self.edit_btn)
         validation_layout.addWidget(self.reject_btn)
-        # Ajout du bouton Undo sous les boutons Accept/Reject/Edit
+        validation_layout.addWidget(self.split_btn)
+        # Ajout du bouton Undo sous la rangée principale
+        undo_layout = QHBoxLayout()
         self.undo_btn = QPushButton("↩ Undo")
         self.undo_btn.clicked.connect(self.undo_last_action)
-        validation_layout.addWidget(self.undo_btn)
+        undo_layout.addWidget(self.undo_btn)
         onset_layout.addLayout(validation_layout)
+        onset_layout.addLayout(undo_layout)
+        # Ajout du split_widget caché sous les boutons
+        self.split_widget = QWidget()
+        self.split_widget.setVisible(False)
+        self.split_widget_layout = QVBoxLayout()
+        self.split_widget.setLayout(self.split_widget_layout)
+        onset_layout.addWidget(self.split_widget)
         # Remove shift left/right buttons and their layout
         # Add edit widgets (hidden by default)
         self.edit_widget = QWidget()
@@ -2175,6 +2186,140 @@ Performance Score:
                 event.accept()
                 return
         event.accept()
+
+    def open_split_dialog(self):
+        if self.split_widget.isVisible():
+            self.split_widget.hide()
+            self.accept_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.split_btn.setEnabled(True)
+            self.setFocus()
+            return
+        if not self.onsets:
+            return
+        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            current_onset = self.filtered_onsets[self.current_onset_idx]
+        else:
+            current_onset = self.onsets[self.current_onset_idx]
+        current_offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
+        self.accept_btn.setEnabled(False)
+        self.edit_btn.setEnabled(False)
+        self.reject_btn.setEnabled(False)
+        self.split_btn.setEnabled(True)
+        for i in reversed(range(self.split_widget_layout.count())):
+            item = self.split_widget_layout.itemAt(i)
+            if item.widget():
+                item.widget().deleteLater()
+        self.split_pairs = []
+        def remove_pair(pair_layout, pair_tuple):
+            if len(self.split_pairs) > 1:
+                # Remove from layout and list
+                for i in reversed(range(pair_layout.count())):
+                    w = pair_layout.itemAt(i).widget()
+                    if w:
+                        w.setParent(None)
+                self.split_widget_layout.removeItem(pair_layout)
+                self.split_pairs.remove(pair_tuple)
+        def add_pair(onset_val=None, offset_val=None):
+            pair_layout = QHBoxLayout()
+            onset_box = QSpinBox()
+            onset_box.setRange(0, 999999)
+            offset_box = QSpinBox()
+            offset_box.setRange(0, 999999)
+            if onset_val is not None:
+                onset_box.setValue(onset_val)
+            if offset_val is not None:
+                offset_box.setValue(offset_val)
+            set_onset_btn = QPushButton("Set onset to current frame")
+            set_offset_btn = QPushButton("Set offset to current frame")
+            set_onset_btn.setFixedWidth(170)
+            set_offset_btn.setFixedWidth(170)
+            def set_onset():
+                onset_box.setValue(self.current_frame)
+            def set_offset():
+                offset_box.setValue(self.current_frame)
+            set_onset_btn.clicked.connect(set_onset)
+            set_offset_btn.clicked.connect(set_offset)
+            remove_btn = QPushButton("✖")
+            remove_btn.setFixedWidth(24)
+            remove_btn.setStyleSheet("color: red; font-weight: bold;")
+            pair_tuple = (onset_box, offset_box)
+            remove_btn.clicked.connect(lambda: remove_pair(pair_layout, pair_tuple))
+            pair_layout.addWidget(QLabel("Onset:"))
+            pair_layout.addWidget(onset_box)
+            pair_layout.addWidget(set_onset_btn)
+            pair_layout.addWidget(QLabel("Offset:"))
+            pair_layout.addWidget(offset_box)
+            pair_layout.addWidget(set_offset_btn)
+            pair_layout.addWidget(remove_btn)
+            self.split_widget_layout.addLayout(pair_layout)
+            self.split_pairs.append(pair_tuple)
+        add_pair(current_onset, current_offset)
+        add_pair()
+        # Ligne boutons add/validate
+        btns_line = QHBoxLayout()
+        add_btn = QPushButton("Add interval")
+        validate_btn = QPushButton("Validate split")
+        add_btn.setFixedWidth(120)
+        validate_btn.setFixedWidth(140)
+        def add_more():
+            add_pair()
+        add_btn.clicked.connect(add_more)
+        btns_line.addWidget(add_btn)
+        btns_line.addWidget(validate_btn)
+        self.split_widget_layout.addLayout(btns_line)
+        self.split_widget.setVisible(True)
+        self.setFocus()
+        def do_split():
+            intervals = []
+            for onset_box, offset_box in self.split_pairs:
+                onset = onset_box.value()
+                offset = offset_box.value()
+                if onset >= offset:
+                    QMessageBox.warning(self, "Invalid interval", f"Onset {onset} must be less than offset {offset}.")
+                    return
+                intervals.append((onset, offset))
+            if current_onset in self.onsets:
+                self.onsets.remove(current_onset)
+            if current_onset in self.onset_types:
+                del self.onset_types[current_onset]
+            if current_onset in self.timeline_canvas.event_offsets:
+                del self.timeline_canvas.event_offsets[current_onset]
+            if current_onset in self.timeline_canvas.onset_validations:
+                del self.timeline_canvas.onset_validations[current_onset]
+            for event_type, events in self.curated_events.items():
+                self.curated_events[event_type] = [e for e in events if e[0] != current_onset]
+            orig_interval = (current_onset, current_offset)
+            def interval_dist(a, b):
+                return abs(a[0]-b[0]) + abs(a[1]-b[1])
+            closest = min(intervals, key=lambda x: interval_dist(x, orig_interval))
+            for onset, offset in intervals:
+                if onset in self.onsets:
+                    continue
+                self.onsets.append(onset)
+                self.timeline_canvas.event_offsets[onset] = offset
+                if (onset, offset) == closest:
+                    self.onset_types[onset] = self.onset_types.get(current_onset, 'active')
+                    self.timeline_canvas.onset_validations[onset] = 'edited'
+                else:
+                    self.onset_types[onset] = self.onset_types.get(current_onset, 'active')
+                    self.timeline_canvas.onset_validations[onset] = 'manually added'
+                if self.onset_types[onset] not in self.curated_events:
+                    self.curated_events[self.onset_types[onset]] = []
+                self.curated_events[self.onset_types[onset]].append([onset, offset, 0])
+            self.onsets = sorted(self.onsets)
+            self.update_onset_filter()
+            self.update_onset_info()
+            self.redraw()
+            self.unsaved_changes = True
+            self.split_widget.hide()
+            self.accept_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.split_btn.setEnabled(True)
+            self.setFocus()
+        validate_btn.clicked.connect(do_split)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
