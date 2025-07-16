@@ -21,6 +21,7 @@ import os
 from PyQt5.QtWidgets import QStyle
 import csv
 from PyQt5.QtWidgets import QScrollArea
+from collections import Counter
 
 class DraggableTimeline(FigureCanvas):
     """Custom matplotlib canvas with draggable timeline"""
@@ -711,7 +712,7 @@ class MotionAnnotator(QWidget):
                     loaded_df = pd.read_csv(fname) if fname.endswith('.csv') else pd.read_excel(fname)
                     self.input_classification_df = loaded_df.copy()  # Garde une copie immuable pour l'export
                     cols = set(loaded_df.columns)
-                    if {'Active', 'Twitch'}.issubset(cols):
+                    if {'active', 'twitch'}.issubset(cols):
                         self.load_framewise_table(fname)
                     elif {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols):
                         self.load_excel_classifications(fname)
@@ -1662,6 +1663,9 @@ Performance Score:
     def load_framewise_table(self, fname):
         import pandas as pd
         df = pd.read_csv(fname) if fname.endswith('.csv') else pd.read_excel(fname)
+        # Clean and fill missing status values
+        if 'status' in df.columns:
+            df['status'] = df['status'].fillna('pending').astype(str).str.strip().str.lower()
         self.motion_energy = df['motion_energy'].values
         self.onsets = []
         self.onset_types = {}
@@ -1678,34 +1682,62 @@ Performance Score:
                     onset = i
                     in_event = True
                 elif val == 0 and in_event:
-                    offset = i
-                    # Ajout unique
+                    offset = i  # Revert: offset is the first frame after the event (exclusive)
                     if onset not in self.onsets:
                         self.onsets.append(onset)
                         self.onset_types[onset] = event_type
                         self.timeline_canvas.event_offsets[onset] = offset
-                        # Status et score si dispo
-                        status = df.at[onset, 'status'] if 'status' in df.columns else 'pending'
-                        score = df.at[onset, 'score'] if 'score' in df.columns else 1
-                        self.timeline_canvas.onset_validations[onset] = status if pd.notna(status) and status != '' else 'pending'
-                        self.event_status[onset] = score if pd.notna(score) and score != '' else 1
-                        if event_type not in self.curated_events:
-                            self.curated_events[event_type] = []
-                        self.curated_events[event_type].append([onset, offset, 1])
+                    status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
+                    score = df.at[onset, 'score'] if 'score' in df.columns else 0
+                    if status == 'edited':
+                        gui_status = 'edited'
+                        gui_score = 1 if float(score) == 1 else 0.5
+                    elif status == 'accepted':
+                        gui_status = 'accepted'
+                        gui_score = 1
+                    elif status == 'rejected':
+                        gui_status = 'rejected'
+                        gui_score = -1
+                    elif status == 'manually added':
+                        gui_status = 'manually added'
+                        gui_score = 0
+                    else:
+                        gui_status = 'pending'
+                        gui_score = 0
+                    self.timeline_canvas.onset_validations[onset] = gui_status
+                    self.event_status[onset] = gui_score
+                    if event_type not in self.curated_events:
+                        self.curated_events[event_type] = []
+                    self.curated_events[event_type].append([onset, offset, 1])
                     in_event = False
             if in_event:
-                offset = len(arr)
+                offset = len(arr)  # Revert: offset is the first frame after the event (exclusive)
                 if onset not in self.onsets:
                     self.onsets.append(onset)
                     self.onset_types[onset] = event_type
                     self.timeline_canvas.event_offsets[onset] = offset
-                    status = df.at[onset, 'status'] if 'status' in df.columns else 'pending'
-                    score = df.at[onset, 'score'] if 'score' in df.columns else 1
-                    self.timeline_canvas.onset_validations[onset] = status if pd.notna(status) and status != '' else 'pending'
-                    self.event_status[onset] = score if pd.notna(score) and score != '' else 1
-                    if event_type not in self.curated_events:
-                        self.curated_events[event_type] = []
-                    self.curated_events[event_type].append([onset, offset, 1])
+                status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
+                score = df.at[onset, 'score'] if 'score' in df.columns else 0
+                if status == 'edited':
+                    gui_status = 'edited'
+                    gui_score = 1 if float(score) == 1 else 0.5
+                elif status == 'accepted':
+                    gui_status = 'accepted'
+                    gui_score = 1
+                elif status == 'rejected':
+                    gui_status = 'rejected'
+                    gui_score = -1
+                elif status == 'manually added':
+                    gui_status = 'manually added'
+                    gui_score = 0
+                else:
+                    gui_status = 'pending'
+                    gui_score = 0
+                self.timeline_canvas.onset_validations[onset] = gui_status
+                self.event_status[onset] = gui_score
+                if event_type not in self.curated_events:
+                    self.curated_events[event_type] = []
+                self.curated_events[event_type].append([onset, offset, 1])
 
         self.onsets = sorted(set(self.onsets))
         self.current_onset_idx = 0
@@ -2200,39 +2232,39 @@ Performance Score:
         mf_df = input_df.copy()
         n_frames = len(mf_df)
         for col in ['active', 'twitch', 'complex']:
-            if col not in mf_df.columns:
-                mf_df[col] = 0
+            # if col not in mf_df.columns:
+            mf_df[col] = 0
         mf_df['status'] = [''] * n_frames
         mf_df['score'] = [''] * n_frames
         # Pour chaque événement, pose les 1 de onset à offset selon la logique demandée
         for onset in self.onsets:
             event_type = self.onset_types.get(onset, '')
             status = self.timeline_canvas.onset_validations.get(onset, 'pending')
-            # Onset/offset à utiliser
-            if status == 'pending':
-                # Onset/offset d'origine
-                orig_onset = self.original_onsets.get(onset, onset)
-                orig_offset = self.original_offsets.get(onset, self.timeline_canvas.event_offsets.get(onset, onset))
-                start = min(orig_onset, orig_offset)
-                end = max(orig_onset, orig_offset)
-            else:
-                # Onset/offset modifié
-                start = min(onset, self.timeline_canvas.event_offsets.get(onset, onset))
-                end = max(onset, self.timeline_canvas.event_offsets.get(onset, onset))
+            # Always use the current (possibly edited) onset and offset
+            start = min(onset, self.timeline_canvas.event_offsets.get(onset, onset))
+            end = max(onset, self.timeline_canvas.event_offsets.get(onset, onset))
             if event_type in ['active', 'twitch', 'complex']:
                 mf_df.loc[start:end, event_type] = 1
-            # Annoter status et score à l'onset (modifié ou original selon le cas)
-            mf_df.at[onset, 'status'] = status
+            # Write status and score only at the onset frame
             if status == 'accepted':
                 score = 1
+                status_label = 'accepted'
             elif status == 'rejected':
                 score = -1
+                status_label = 'rejected'
             elif status == 'edited':
-                score = 0.5
+                if self.event_status.get(onset, 0.5) == 1:
+                    score = 1
+                else:
+                    score = 0.5
+                status_label = 'edited'
             elif status == 'manually added':
                 score = 0
+                status_label = 'manually added'
             else:
                 score = 0
+                status_label = status
+            mf_df.at[onset, 'status'] = status_label
             mf_df.at[onset, 'score'] = score
         mf_path = os.path.join(output_dir, f"validation_MF{suffix}.xlsx")
         mf_df.to_excel(mf_path, index=False)
@@ -2266,14 +2298,28 @@ Performance Score:
         self.create_validation_comparison_plot(export_events, save_path=plot_path)
         # Add final classification plot only if no pending events
         if not has_pending:
+            # Remove all _pending files in output_dir
+            for fname in os.listdir(output_dir):
+                if '_pending' in fname:
+                    try:
+                        os.remove(os.path.join(output_dir, fname))
+                    except Exception as e:
+                        print(f"Could not remove {fname}: {e}")
             final_plot_path = os.path.join(output_dir, f"final_classification_plot{suffix}.png")
             self.create_final_classification_plot(export_events, save_path=final_plot_path)
+        # Export pie chart of event status distribution
+        pie_chart_path = os.path.join(output_dir, f"validation_status_pie{suffix}.png")
+        self.create_validation_pie_chart(export_events, save_path=pie_chart_path)
         # Export metrics JSON
-        metrics = getattr(self, 'performance_metrics', {})
-        total = metrics.get('true_positives', 0) + metrics.get('false_positives', 0)
-        precision = metrics.get('true_positives', 0) / total if total > 0 else 0
+        true_positives = sum(1 for event in export_events if event[3] in ('accepted', 'edited'))
+        false_positives = sum(1 for event in export_events if event[3] == 'rejected')
+        total = true_positives + false_positives
+        precision = true_positives / total if total > 0 else 0
         results = {
-            'performance_metrics': metrics,
+            'performance_metrics': {
+                'true_positives': true_positives,
+                'false_positives': false_positives
+            },
             'precision': precision,
             'total_annotated': total
         }
@@ -2438,6 +2484,52 @@ Performance Score:
         self.timeline_canvas.current_frame = value
         self.timeline_canvas.update_timeline()
         self.update_onset_info()
+
+    def create_validation_pie_chart(self, export_events, save_path=None):
+        """Create and save a pie chart showing the percentage of accepted, edited (<X, >X), pending, rejected, and manually added events."""
+        import matplotlib.pyplot as plt
+        from collections import Counter
+        # Count statuses with edit threshold
+        edit_threshold = getattr(self, 'edit_threshold', 5)
+        status_buckets = []
+        for event in export_events:
+            status = event[3]
+            score = event[4]
+            if status == 'edited':
+                # Determine shift (score==1 means < threshold, 0.5 means > threshold)
+                # If you have the actual shift, use it; otherwise, use score as proxy
+                if score == 1:
+                    status_buckets.append(f'edited <{edit_threshold}')
+                else:
+                    status_buckets.append(f'edited >{edit_threshold}')
+            else:
+                status_buckets.append(status)
+        counter = Counter(status_buckets)
+        labels = []
+        sizes = []
+        colors = []
+        color_map = {
+            'accepted': '#4CAF50',      # Green
+            f'edited <{edit_threshold}': '#FFD54F',  # Light yellow
+            f'edited >{edit_threshold}': '#FFA726',  # Orange
+            'pending': '#90A4AE',       # Gray-blue
+            'rejected': '#F44336',      # Red
+            'manually added': '#00CED1' # Turquoise
+        }
+        for status in ['accepted', f'edited <{edit_threshold}', f'edited >{edit_threshold}', 'pending', 'rejected', 'manually added']:
+            if counter[status] > 0:
+                labels.append(f"{status.capitalize()} ({counter[status]})")
+                sizes.append(counter[status])
+                colors.append(color_map.get(status, '#BDBDBD'))
+        if not sizes:
+            return  # Nothing to plot
+        plt.figure(figsize=(6, 6))
+        plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=140, textprops={'fontsize': 12})
+        plt.title('Event Validation Status Distribution', fontsize=15, fontweight='bold')
+        plt.axis('equal')
+        if save_path:
+            plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        plt.close()
 
 
 
