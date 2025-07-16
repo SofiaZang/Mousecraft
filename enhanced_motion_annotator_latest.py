@@ -89,7 +89,7 @@ class DraggableTimeline(FigureCanvas):
         self.event_status = event_status or {}
 
         self.ax.clear()
-        self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='blue', linewidth=1)
+        self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='blue', linewidth=1)  # Use lighter blue for motion energy
 
         # Plot onset-to-offset spans
         for onset in self.onsets:
@@ -375,10 +375,25 @@ class MotionAnnotator(QWidget):
         self.frame_slider.valueChanged.connect(self.slider_moved)
         left_panel.addWidget(self.frame_slider)
 
-        # Frame info
-        self.frame_info_label = QLabel("Frame: 0 / 0")
-        left_panel.addWidget(self.frame_info_label)
-        
+        # Frame info (replace label with spinbox + label)
+        frame_info_layout = QHBoxLayout()
+        frame_info_layout.setContentsMargins(0, 0, 0, 0)
+        frame_info_layout.setSpacing(4)
+        frame_info_layout.addWidget(QLabel("Frame:"))
+        self.frame_spinbox = QSpinBox()
+        self.frame_spinbox.setRange(0, self.total_frames - 1)
+        self.frame_spinbox.setValue(self.current_frame)
+        self.frame_spinbox.setFixedWidth(70)
+        self.frame_spinbox.valueChanged.connect(self.frame_spinbox_changed)
+        frame_info_layout.addWidget(self.frame_spinbox)
+        frame_info_layout.addWidget(QLabel("/"))
+        self.total_frames_label = QLabel(str(self.total_frames))
+        frame_info_layout.addWidget(self.total_frames_label)
+        frame_info_layout.addStretch(1)
+        left_panel.addLayout(frame_info_layout)
+        # Remove: self.frame_info_label = QLabel("Frame: 0 / 0")
+        # left_panel.addWidget(self.frame_info_label)
+
         # Add onset status bar below video
         self.onset_status_label = QLabel("No onset at current frame")
         self.onset_status_label.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
@@ -390,7 +405,9 @@ class MotionAnnotator(QWidget):
         event_type_layout = QHBoxLayout()
         event_type_layout.addWidget(QLabel("Event Type:"))
         self.event_type_combo = QComboBox()
+        self.event_type_combo.addItem("Select type…")  # Placeholder
         self.event_type_combo.addItems(["twitch", "active", "complex"])
+        self.event_type_combo.setCurrentIndex(0)
         event_type_layout.addWidget(self.event_type_combo)
         manual_layout.addLayout(event_type_layout)
         onset_offset_layout = QGridLayout()
@@ -588,7 +605,7 @@ class MotionAnnotator(QWidget):
         content_layout.addWidget(splitter)
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
-        # Supprimer l'appel à QTimer.singleShot(0, self.finalize_ui) et la méthode finalize_ui
+        # Supprimer l'appel à QTimer.singleShot(b0, self.finalize_ui) et la méthode finalize_ui
         # Supprimer l'ajout du bouton Pause (et des autres boutons de contrôle vidéo) au left_panel si ce n'est pas nécessaire
         # Garder la configuration des boutons dans la barre de contrôle vidéo
         # S'assurer que Pause reste toujours cliquable et visible
@@ -694,7 +711,7 @@ class MotionAnnotator(QWidget):
                     loaded_df = pd.read_csv(fname) if fname.endswith('.csv') else pd.read_excel(fname)
                     self.input_classification_df = loaded_df.copy()  # Garde une copie immuable pour l'export
                     cols = set(loaded_df.columns)
-                    if {'active', 'twitch'}.issubset(cols):
+                    if {'Active', 'Twitch'}.issubset(cols):
                         self.load_framewise_table(fname)
                     elif {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols):
                         self.load_excel_classifications(fname)
@@ -902,6 +919,9 @@ class MotionAnnotator(QWidget):
         onset = self.onset_spinbox.value()
         offset = self.offset_spinbox.value()
         event_type = self.event_type_combo.currentText()
+        if event_type == "Select type…":
+            QMessageBox.warning(self, "Invalid Event Type", "Please select an event type (twitch, active, or complex) before adding the event.")
+            return
         if onset >= offset:
             QMessageBox.warning(self, "Invalid Event", 
                 f"Offset frame ({offset}) must be greater than onset frame ({onset}).\n\n"
@@ -921,6 +941,9 @@ class MotionAnnotator(QWidget):
             existing_offset = self.timeline_canvas.event_offsets.get(existing_onset, existing_onset)
             # Overlap if intervals [onset, offset) and [existing_onset, existing_offset) intersect
             if not (offset <= existing_onset or onset >= existing_offset):
+                overlapping.append((self.onset_types.get(existing_onset, '?'), existing_onset, existing_offset))
+            # Also treat exact onset match as overlap
+            elif onset == existing_onset:
                 overlapping.append((self.onset_types.get(existing_onset, '?'), existing_onset, existing_offset))
         go_to_overlap = False
         overlap_onset = None
@@ -981,6 +1004,8 @@ class MotionAnnotator(QWidget):
                 new_idx = self.onsets.index(onset)
                 self.goto_onset(new_idx)
         QMessageBox.information(self, "Success", f"Added {event_type} event from frame {onset} to {offset}")
+        # After successful add, reset dropdown to placeholder
+        self.event_type_combo.setCurrentIndex(0)
         
     def delete_current_onset(self):
         """Delete the currently selected onset"""
@@ -1096,7 +1121,12 @@ class MotionAnnotator(QWidget):
         self.update_onset_info()  # Ne change pas l'onset courant
 
     def update_frame_info(self):
-        self.frame_info_label.setText(f"Frame: {self.current_frame} / {self.total_frames}")
+        # Update spinbox and total frames label
+        self.frame_spinbox.blockSignals(True)
+        self.frame_spinbox.setValue(self.current_frame)
+        self.frame_spinbox.blockSignals(False)
+        self.frame_spinbox.setMaximum(max(0, self.total_frames - 1))
+        self.total_frames_label.setText(str(self.total_frames))
         
     def update_onset_filter(self):
         # Update filtered_onsets based on both filter selections
@@ -2399,6 +2429,15 @@ Performance Score:
             label.move(x, (dialog_height - mouse_height) // 2)
             QTimer.singleShot(interval, lambda: animate(step + 1))
         animate()
+
+    def frame_spinbox_changed(self, value):
+        # Jump to the frame entered by the user
+        self.current_frame = value
+        self.frame_slider.setValue(value)
+        self.show_frame(value)
+        self.timeline_canvas.current_frame = value
+        self.timeline_canvas.update_timeline()
+        self.update_onset_info()
 
 
 
