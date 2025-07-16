@@ -8,9 +8,9 @@ from PyQt5.QtWidgets import (
     QLabel, QSlider, QFileDialog, QSpinBox, QDoubleSpinBox, 
     QGroupBox, QGridLayout, QTextEdit, QComboBox, QCheckBox,
     QMessageBox, QProgressBar, QSplitter, QLineEdit, QSizePolicy,
-    QDialog, QFrame
+    QDialog, QFrame, QSpacerItem
 )
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon, QFont, QFontDatabase
+from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon, QFont, QFontDatabase, QMovie
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
@@ -229,6 +229,16 @@ class MotionAnnotator(QWidget):
         self.setGeometry(100, 100, 1400, 900)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
+        # Set window icon to mouse.webp if possible, else fallback to MouseCraft.png
+        import os
+        if os.path.exists("mouse.webp"):
+            try:
+                self.setWindowIcon(QIcon("mouse.webp"))
+            except Exception:
+                if os.path.exists("MouseCraft.png"):
+                    self.setWindowIcon(QIcon("MouseCraft.png"))
+        elif os.path.exists("MouseCraft.png"):
+            self.setWindowIcon(QIcon("MouseCraft.png"))
         
         # Data storage
         self.video_path = None
@@ -269,10 +279,24 @@ class MotionAnnotator(QWidget):
         
     def init_ui(self):
         main_layout = QVBoxLayout()
+        # Add MouseCraft logo at the top, centered
+        logo_label = QLabel()
+        logo_label.setAlignment(Qt.AlignCenter)
+        import os
+        if os.path.exists("MouseCraft.png"):
+            logo_pixmap = QPixmap("MouseCraft.png")
+            logo_label.setPixmap(logo_pixmap.scaledToWidth(300, Qt.SmoothTransformation))
+        else:
+            logo_label.setText("<b>MouseCraft</b>")
+            logo_label.setStyleSheet("font-size: 32px; font-weight: bold; color: #333;")
+        main_layout.addWidget(logo_label)
         content_layout = QHBoxLayout()
 
         # Left panel - Video and controls
         left_panel = QVBoxLayout()
+
+        # Add vertical spacer between logo and controls
+        left_panel.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         # Video folder label (above video)
         self.video_folder_label = QLabel("")
@@ -541,9 +565,10 @@ class MotionAnnotator(QWidget):
         metrics_group = QGroupBox("Performance Score")
         metrics_layout = QVBoxLayout()
         self.metrics_text = QTextEdit()
-        self.metrics_text.setMaximumHeight(150)  # Plus grand en Y
-        self.metrics_text.setMinimumHeight(100)
+        self.metrics_text.setMaximumHeight(80)  # Reduce height in Y
+        self.metrics_text.setMinimumHeight(50)
         self.metrics_text.setReadOnly(True)
+        self.metrics_text.setStyleSheet("font-size: 10px;")  # Smaller font
         metrics_layout.addWidget(self.metrics_text)
         metrics_group.setLayout(metrics_layout)
         left_panel.addWidget(metrics_group)
@@ -2307,6 +2332,73 @@ Performance Score:
                 else:
                     break
         return overlaps
+
+    def show_firework_animation(self):
+        """Show a firework GIF animation for 2.5 seconds when all pending events are resolved."""
+        dialog = QDialog(self)
+        dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        dialog.setAttribute(Qt.WA_TranslucentBackground)
+        dialog.setModal(True)
+        label = QLabel(dialog)
+        movie = QMovie("Fireworks.gif")
+        label.setMovie(movie)
+        label.setAlignment(Qt.AlignCenter)
+        dialog.resize(400, 400)
+        label.resize(400, 400)
+        movie.start()
+        dialog.show()
+        QTimer.singleShot(2500, dialog.accept)
+
+    def set_event_status(self, onset, status):
+        # ... existing code for setting status ...
+        self.timeline_canvas.onset_validations[onset] = status
+        # ... any other logic ...
+        # Check if there are no more pending events
+        if not any(self.timeline_canvas.onset_validations.get(o, 'pending') == 'pending' for o in self.onsets):
+            self.show_firework_animation()
+        # ... rest of the function ...
+
+    def show_mouse_animation(self):
+        """Show a mouse image moving from left to right for 2.5 seconds when half or more events are no longer pending."""
+        from PyQt5.QtWidgets import QDialog, QLabel
+        from PyQt5.QtCore import Qt, QTimer
+        from PyQt5.QtGui import QMovie, QPixmap
+        import os
+        duration_ms = 2500
+        steps = 50
+        interval = duration_ms // steps
+        dialog_width = 500
+        dialog_height = 200
+        mouse_width = 100
+        mouse_height = 100
+        dialog = QDialog(self)
+        dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        dialog.setAttribute(Qt.WA_TranslucentBackground)
+        dialog.setModal(True)
+        dialog.resize(dialog_width, dialog_height)
+        label = QLabel(dialog)
+        label.resize(mouse_width, mouse_height)
+        label.setAttribute(Qt.WA_TranslucentBackground)
+        # Support animated or static image
+        if os.path.splitext("mouse.webp")[1].lower() in [".gif", ".webp"]:
+            movie = QMovie("mouse.webp")
+            label.setMovie(movie)
+            movie.start()
+        else:
+            pixmap = QPixmap("mouse.webp")
+            label.setPixmap(pixmap.scaled(mouse_width, mouse_height, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # Start at left
+        label.move(0, (dialog_height - mouse_height) // 2)
+        dialog.show()
+        # Animate
+        def animate(step=0):
+            if step > steps:
+                dialog.accept()
+                return
+            x = int((dialog_width - mouse_width) * step / steps)
+            label.move(x, (dialog_height - mouse_height) // 2)
+            QTimer.singleShot(interval, lambda: animate(step + 1))
+        animate()
 
 
 
