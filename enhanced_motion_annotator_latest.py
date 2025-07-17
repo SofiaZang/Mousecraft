@@ -7,9 +7,10 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QFileDialog, QSpinBox, QDoubleSpinBox, 
     QGroupBox, QGridLayout, QTextEdit, QComboBox, QCheckBox,
-    QMessageBox, QProgressBar, QSplitter, QLineEdit, QSizePolicy
+    QMessageBox, QProgressBar, QSplitter, QLineEdit, QSizePolicy,
+    QDialog, QFrame, QSpacerItem
 )
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon, QFont, QFontDatabase
+from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon, QFont, QFontDatabase, QMovie
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
@@ -19,6 +20,8 @@ from matplotlib.patches import Rectangle
 import os
 from PyQt5.QtWidgets import QStyle
 import csv
+from PyQt5.QtWidgets import QScrollArea
+from collections import Counter
 
 class DraggableTimeline(FigureCanvas):
     """Custom matplotlib canvas with draggable timeline"""
@@ -87,7 +90,7 @@ class DraggableTimeline(FigureCanvas):
         self.event_status = event_status or {}
 
         self.ax.clear()
-        self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='blue', linewidth=1)
+        self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='blue', linewidth=1)  # Use lighter blue for motion energy
 
         # Plot onset-to-offset spans
         for onset in self.onsets:
@@ -104,16 +107,37 @@ class DraggableTimeline(FigureCanvas):
         # Add validation markers as bullet points on top
         for onset in self.onsets:
             validation = self.onset_validations.get(onset, 'pending')
-            score = self.event_status.get(onset, 0)
-            if validation == 'accepted':
-                self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
-            elif validation == 'rejected':
-                self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
-            elif validation == 'edited':
-                if score == 1:
-                    self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
+            # Skip pending events (no marker)
+            if validation == 'pending':
+                continue
+            # Compute score for color logic
+            score = 0
+            if validation == 'edited':
+                # Check if this edited event has a score in event_status
+                if hasattr(self, 'event_status') and onset in self.event_status:
+                    score = self.event_status[onset]
                 else:
-                    self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color='orange', markersize=6)
+                    score = 0.5  # Default for edited events
+            elif validation == 'accepted':
+                score = 1
+            elif validation == 'rejected':
+                score = -1
+            elif validation == 'manually added':
+                score = 0
+            else:
+                score = 0
+            # Assign color based on score
+            if score == 1:
+                color = 'green'
+            elif score == 0.5:
+                color = 'orange'
+            elif score == -1:
+                color = 'red'
+            elif validation == 'manually added':
+                color = '#00CED1'  # Turquoise blue for manually added events
+            else:
+                color = 'gray'  # Fallback for any other cases
+            self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
 
         self.ax.set_xlim(0, max(self.total_frames, 1000))
         self.ax.set_ylim(0, max(self.motion_energy) * 1.2)  # Increased ylim to accommodate bullets
@@ -206,6 +230,16 @@ class MotionAnnotator(QWidget):
         self.setGeometry(100, 100, 1400, 900)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
+        # Set window icon to mouse.webp if possible, else fallback to MouseCraft.png
+        import os
+        if os.path.exists("mouse.webp"):
+            try:
+                self.setWindowIcon(QIcon("mouse.webp"))
+            except Exception:
+                if os.path.exists("MouseCraft.png"):
+                    self.setWindowIcon(QIcon("MouseCraft.png"))
+        elif os.path.exists("MouseCraft.png"):
+            self.setWindowIcon(QIcon("MouseCraft.png"))
         
         # Data storage
         self.video_path = None
@@ -236,16 +270,34 @@ class MotionAnnotator(QWidget):
         self.original_onsets = {}  # Maps current onset to original input onset
         # 1. In __init__, add storage for original offsets
         self.original_offsets = {}  # Maps current onset to original input offset
+        
+        # Threshold for edited events score (default: 5 frames)
+        self.edit_threshold = 5
 
         self.init_ui()
         self.setup_timer()
+        self.unsaved_changes = False  # Track unsaved changes
         
     def init_ui(self):
         main_layout = QVBoxLayout()
+        # Add MouseCraft logo at the top, centered
+        logo_label = QLabel()
+        logo_label.setAlignment(Qt.AlignCenter)
+        import os
+        if os.path.exists("MouseCraft.png"):
+            logo_pixmap = QPixmap("MouseCraft.png")
+            logo_label.setPixmap(logo_pixmap.scaledToWidth(300, Qt.SmoothTransformation))
+        else:
+            logo_label.setText("<b>MouseCraft</b>")
+            logo_label.setStyleSheet("font-size: 32px; font-weight: bold; color: #333;")
+        main_layout.addWidget(logo_label)
         content_layout = QHBoxLayout()
 
         # Left panel - Video and controls
         left_panel = QVBoxLayout()
+
+        # Add vertical spacer between logo and controls
+        left_panel.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         # Video folder label (above video)
         self.video_folder_label = QLabel("")
@@ -283,13 +335,9 @@ class MotionAnnotator(QWidget):
         self.play_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.pause_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.stop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.play_btn.setMinimumHeight(36)
-        self.pause_btn.setMinimumHeight(36)
-        self.stop_btn.setMinimumHeight(36)
-        # Nettoyage : supprime les styles CSS contenant 'z-index' sur les boutons
-        self.pause_btn.setStyleSheet("background: rgba(255, 0, 0, 0.5);")
-        self.play_btn.setStyleSheet("background: rgba(0, 255, 0, 0.5);")
-        self.stop_btn.setStyleSheet("background: rgba(0, 0, 255, 0.5);")
+        self.play_btn.setMinimumHeight(34)
+        self.pause_btn.setMinimumHeight(34)
+        self.stop_btn.setMinimumHeight(34)
         # Diagnostic widgets recouvrants
         for child in self.findChildren(QWidget):
             if child is not self.pause_btn and child.geometry().intersects(self.pause_btn.geometry()):
@@ -328,10 +376,25 @@ class MotionAnnotator(QWidget):
         self.frame_slider.valueChanged.connect(self.slider_moved)
         left_panel.addWidget(self.frame_slider)
 
-        # Frame info
-        self.frame_info_label = QLabel("Frame: 0 / 0")
-        left_panel.addWidget(self.frame_info_label)
-        
+        # Frame info (replace label with spinbox + label)
+        frame_info_layout = QHBoxLayout()
+        frame_info_layout.setContentsMargins(0, 0, 0, 0)
+        frame_info_layout.setSpacing(4)
+        frame_info_layout.addWidget(QLabel("Frame:"))
+        self.frame_spinbox = QSpinBox()
+        self.frame_spinbox.setRange(0, self.total_frames - 1)
+        self.frame_spinbox.setValue(self.current_frame)
+        self.frame_spinbox.setFixedWidth(70)
+        self.frame_spinbox.valueChanged.connect(self.frame_spinbox_changed)
+        frame_info_layout.addWidget(self.frame_spinbox)
+        frame_info_layout.addWidget(QLabel("/"))
+        self.total_frames_label = QLabel(str(self.total_frames))
+        frame_info_layout.addWidget(self.total_frames_label)
+        frame_info_layout.addStretch(1)
+        left_panel.addLayout(frame_info_layout)
+        # Remove: self.frame_info_label = QLabel("Frame: 0 / 0")
+        # left_panel.addWidget(self.frame_info_label)
+
         # Add onset status bar below video
         self.onset_status_label = QLabel("No onset at current frame")
         self.onset_status_label.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
@@ -343,7 +406,9 @@ class MotionAnnotator(QWidget):
         event_type_layout = QHBoxLayout()
         event_type_layout.addWidget(QLabel("Event Type:"))
         self.event_type_combo = QComboBox()
+        self.event_type_combo.addItem("Select type…")  # Placeholder
         self.event_type_combo.addItems(["twitch", "active", "complex"])
+        self.event_type_combo.setCurrentIndex(0)
         event_type_layout.addWidget(self.event_type_combo)
         manual_layout.addLayout(event_type_layout)
         onset_offset_layout = QGridLayout()
@@ -363,9 +428,20 @@ class MotionAnnotator(QWidget):
         onset_offset_layout.addWidget(self.offset_spinbox, 1, 1)
         onset_offset_layout.addWidget(self.set_current_offset_btn, 1, 2)
         manual_layout.addLayout(onset_offset_layout)
+        
         self.add_event_btn = QPushButton("➕ Add Event")
         self.add_event_btn.clicked.connect(self.add_manual_event)
         manual_layout.addWidget(self.add_event_btn)
+        
+        # Add threshold control for edited events
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(QLabel("Edit Threshold (frames):"))
+        self.edit_threshold_spinbox = QSpinBox()
+        self.edit_threshold_spinbox.setRange(1, 100)
+        self.edit_threshold_spinbox.setValue(self.edit_threshold)
+        self.edit_threshold_spinbox.valueChanged.connect(self.update_edit_threshold)
+        threshold_layout.addWidget(self.edit_threshold_spinbox)
+        manual_layout.addLayout(threshold_layout)
         manual_event_group.setLayout(manual_layout)
         left_panel.addWidget(manual_event_group)
 
@@ -417,7 +493,7 @@ class MotionAnnotator(QWidget):
         filter_layout.addWidget(self.onset_filter_combo)
         filter_layout.addWidget(QLabel("Event status"))
         self.status_filter_combo = QComboBox()
-        self.status_filter_combo.addItems(["All", "Editing", "Pending", "Accepted", "Rejected", "Manually Added"])
+        self.status_filter_combo.addItems(["All", "Edited", "Pending", "Accepted", "Rejected", "Manually Added"])
         self.status_filter_combo.currentIndexChanged.connect(self.update_onset_filter)
         filter_layout.addWidget(self.status_filter_combo)
         onset_layout.addLayout(filter_layout)
@@ -445,20 +521,19 @@ class MotionAnnotator(QWidget):
         onset_layout.addWidget(self.offset_validation_widget)
         validation_layout = QHBoxLayout()
         self.accept_btn = QPushButton("✓ Accept")
-        self.reject_btn = QPushButton("✗ Reject")
-        self.accept_btn.clicked.connect(self.accept_and_toggle_offset)
-        self.reject_btn.clicked.connect(lambda: self.validate_onset('rejected'))
-        validation_layout.addWidget(self.accept_btn)
-        validation_layout.addWidget(self.reject_btn)
-        # Add Edit button
         self.edit_btn = QPushButton("✎ Edit")
-        self.edit_btn.clicked.connect(self.start_edit_onset)
-        validation_layout.addWidget(self.edit_btn)
-        # Ajout du bouton Undo sous les boutons Accept/Reject/Edit
+        self.reject_btn = QPushButton("✗ Reject")
         self.undo_btn = QPushButton("↩ Undo")
+        self.accept_btn.clicked.connect(self.accept_and_toggle_offset)
+        self.edit_btn.clicked.connect(self.start_edit_onset)
+        self.reject_btn.clicked.connect(lambda: self.validate_onset('rejected'))
         self.undo_btn.clicked.connect(self.undo_last_action)
+        validation_layout.addWidget(self.accept_btn)
+        validation_layout.addWidget(self.edit_btn)
+        validation_layout.addWidget(self.reject_btn)
         validation_layout.addWidget(self.undo_btn)
         onset_layout.addLayout(validation_layout)
+
         # Remove shift left/right buttons and their layout
         # Add edit widgets (hidden by default)
         self.edit_widget = QWidget()
@@ -467,9 +542,9 @@ class MotionAnnotator(QWidget):
         self.edit_onset_spinbox.setRange(0, 999999)
         self.edit_offset_spinbox = QSpinBox()
         self.edit_offset_spinbox.setRange(0, 999999)
-        edit_form.addWidget(QLabel("New Onset:"))
+        edit_form.addWidget(QLabel("Onset to Offset:"))
         edit_form.addWidget(self.edit_onset_spinbox)
-        edit_form.addWidget(QLabel("New Offset:"))
+        edit_form.addWidget(QLabel("→"))
         edit_form.addWidget(self.edit_offset_spinbox)
         self.finish_edit_btn = QPushButton("Finish Edit")
         self.finish_edit_btn.clicked.connect(self.finish_edit_onset)
@@ -477,6 +552,10 @@ class MotionAnnotator(QWidget):
         self.edit_widget.setLayout(edit_form)
         self.edit_widget.hide()
         onset_layout.addWidget(self.edit_widget)
+        # Remove this line - split_widget no longer exists
+        # Remove shift left/right buttons and their layout
+        # Add edit widgets (hidden by default)
+        # (undo_layout will be added at the end, after all widgets)
         onset_group.setLayout(onset_layout)
         # Groupe Save & Export
         save_group = QGroupBox("Save & Export")
@@ -500,18 +579,21 @@ class MotionAnnotator(QWidget):
         self.save_export_btn.clicked.connect(self.export_all_outputs)
         save_layout.addWidget(self.save_export_btn)
         save_group.setLayout(save_layout)
+        # Place Performance Score (metrics_group) just below the timeline (drag)
         metrics_group = QGroupBox("Performance Score")
         metrics_layout = QVBoxLayout()
         self.metrics_text = QTextEdit()
-        self.metrics_text.setMaximumHeight(150)  # Plus grand en Y
-        self.metrics_text.setMinimumHeight(100)
+        self.metrics_text.setMaximumHeight(80)  # Reduce height in Y
+        self.metrics_text.setMinimumHeight(50)
         self.metrics_text.setReadOnly(True)
+        self.metrics_text.setStyleSheet("font-size: 10px;")  # Smaller font
         metrics_layout.addWidget(self.metrics_text)
         metrics_group.setLayout(metrics_layout)
+        left_panel.addWidget(metrics_group)
+        left_panel.addWidget(save_group)
         right_panel.addWidget(timeline_group)
         right_panel.addWidget(onset_group)
-        right_panel.addWidget(save_group)
-        right_panel.addWidget(metrics_group)
+        right_panel.addWidget(manual_event_group)
         splitter = QSplitter(Qt.Horizontal)
         left_widget = QWidget()
         left_widget.setLayout(left_panel)
@@ -524,7 +606,7 @@ class MotionAnnotator(QWidget):
         content_layout.addWidget(splitter)
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
-        # Supprimer l'appel à QTimer.singleShot(0, self.finalize_ui) et la méthode finalize_ui
+        # Supprimer l'appel à QTimer.singleShot(b0, self.finalize_ui) et la méthode finalize_ui
         # Supprimer l'ajout du bouton Pause (et des autres boutons de contrôle vidéo) au left_panel si ce n'est pas nécessaire
         # Garder la configuration des boutons dans la barre de contrôle vidéo
         # S'assurer que Pause reste toujours cliquable et visible
@@ -566,7 +648,7 @@ class MotionAnnotator(QWidget):
             import os
             parent_folder = os.path.basename(os.path.dirname(fname))
             grandparent_folder = os.path.basename(os.path.dirname(os.path.dirname(fname)))
-            self.video_folder_label.setText(f"Dossier vidéo : {grandparent_folder} / {parent_folder}")
+            self.video_folder_label.setText(f"Video folder : {grandparent_folder} / {parent_folder}")
         
     def load_motion_energy(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Load Motion Energy', '', 'CSV/Excel (*.csv *.xlsx *.npy)')
@@ -578,7 +660,7 @@ class MotionAnnotator(QWidget):
             arriere_grandparent = os.path.dirname(grandparent)
             grandparent_folder = os.path.basename(grandparent)
             arriere_grandparent_folder = os.path.basename(arriere_grandparent)
-            self.motion_energy_folder_label.setText(f"Dossier motion energy : {arriere_grandparent_folder} / {grandparent_folder}")
+            self.motion_energy_folder_label.setText(f"Motion energy folder : {arriere_grandparent_folder} / {grandparent_folder}")
             if fname.endswith('.npy'):
                 self.motion_energy = np.load(fname)
             elif fname.endswith('.csv'):
@@ -622,7 +704,7 @@ class MotionAnnotator(QWidget):
                 arriere_grandparent = os.path.dirname(grandparent)
                 grandparent_folder = os.path.basename(grandparent)
                 arriere_grandparent_folder = os.path.basename(arriere_grandparent)
-                self.motion_energy_folder_label.setText(f"Dossier classification : {arriere_grandparent_folder} / {grandparent_folder}")
+                self.motion_energy_folder_label.setText(f"Classification folder : {arriere_grandparent_folder} / {grandparent_folder}")
                 if fname.endswith('.json'):
                     self.load_json_classifications(fname)
                 else:
@@ -636,6 +718,7 @@ class MotionAnnotator(QWidget):
                         self.load_excel_classifications(fname)
                     else:
                         QMessageBox.warning(self, "Warning", "File format not recognized. Please provide a valid classification file.")
+                self.undo_btn.setEnabled(True)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load classifications: {str(e)}")
             import traceback
@@ -669,7 +752,8 @@ class MotionAnnotator(QWidget):
         # Go to first onset
         if self.onsets:
             self.goto_onset(0)
-            
+        self.undo_btn.setEnabled(True)
+        
     def load_excel_classifications(self, fname):
         """Load classifications from Excel/CSV format with SLEAP-like structure"""
         try:
@@ -821,43 +905,108 @@ class MotionAnnotator(QWidget):
         """Update offset range to be >= onset"""
         onset = self.onset_spinbox.value()
         self.offset_spinbox.setMinimum(onset)
-        if self.offset_spinbox.value() < onset:
-            self.offset_spinbox.setValue(onset)
+        # Only set default offset if it's invalid (<= onset)
+        current_offset = self.offset_spinbox.value()
+        if current_offset <= onset:
+            self.offset_spinbox.setValue(onset + 1)
+            
+    def update_edit_threshold(self):
+        """Update the edit threshold value"""
+        self.edit_threshold = self.edit_threshold_spinbox.value()
             
     def add_manual_event(self):
-        """Add a manually specified event"""
+        self.unsaved_changes = True
+        print("add_manual_event called")
         onset = self.onset_spinbox.value()
         offset = self.offset_spinbox.value()
         event_type = self.event_type_combo.currentText()
-        
-        if onset >= offset:
-            QMessageBox.warning(self, "Warning", "Onset must be less than offset")
+        if event_type == "Select type…":
+            QMessageBox.warning(self, "Invalid Event Type", "Please select an event type (twitch, active, or complex) before adding the event.")
             return
-            
-        # Add to timeline
-        self.timeline_canvas.add_event(onset, event_type, offset)
-        
-        # Add to data structures
+        if onset >= offset:
+            QMessageBox.warning(self, "Invalid Event", 
+                f"Offset frame ({offset}) must be greater than onset frame ({onset}).\n\n"
+                f"An event must have a duration of at least 1 frame.\n"
+                f"Please set the offset to a frame number higher than {onset}.")
+            return
+        # Vérifie si cet onset existe déjà pour éviter les doublons
+        if onset in self.onsets:
+            QMessageBox.warning(self, "Warning", f"Event at frame {onset} already exists")
+            return
+        # Check for overlap with existing events (ignore rejected)
+        overlapping = []
+        for existing_onset in self.onsets:
+            existing_status = self.timeline_canvas.onset_validations.get(existing_onset, 'pending')
+            if existing_status == 'rejected':
+                continue
+            existing_offset = self.timeline_canvas.event_offsets.get(existing_onset, existing_onset)
+            # Overlap if intervals [onset, offset) and [existing_onset, existing_offset) intersect
+            if not (offset <= existing_onset or onset >= existing_offset):
+                overlapping.append((self.onset_types.get(existing_onset, '?'), existing_onset, existing_offset))
+            # Also treat exact onset match as overlap
+            elif onset == existing_onset:
+                overlapping.append((self.onset_types.get(existing_onset, '?'), existing_onset, existing_offset))
+        go_to_overlap = False
+        overlap_onset = None
+        if overlapping:
+            overlap_str = "\n".join([f"- {typ} from {ons} to {off}" for typ, ons, off in overlapping])
+            msg = f"Are you sure you want to add this event? It overlaps with the following event(s):\n{overlap_str}"
+            reply = QMessageBox.question(self, "Overlap detected", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+            # Aller à l'onset du premier événement chevauchant après ajout
+            go_to_overlap = True
+            overlap_onset = overlapping[0][1]
+        # Ajoute aux structures principales (une seule fois)
         self.onsets.append(onset)
         self.onset_types[onset] = event_type
-        self.timeline_canvas.event_offsets[onset] = offset  # Store the offset
-        
-        # Sort onsets
-        self.onsets = sorted(self.onsets)
-        
+        self.timeline_canvas.event_offsets[onset] = offset
+        # Set validation status to manually added
+        self.timeline_canvas.onset_validations[onset] = 'manually added'
         # Update curated events
         if event_type not in self.curated_events:
             self.curated_events[event_type] = []
-        self.curated_events[event_type].append([onset, offset, 0])  # Store onset, offset, and validation status (0 = manually added)
-        
-        # Set validation status to manually added
-        self.timeline_canvas.onset_validations[onset] = 'manually added'
-        
-        # Go to the new event
-        new_idx = self.onsets.index(onset)
-        self.goto_onset(new_idx)
-        
+        self.curated_events[event_type].append([onset, offset, 0])  # 0 = manually added
+        # Sort onsets to maintain chronological order
+        self.onsets = sorted(self.onsets)
+        # Store in undo stack
+        self.undo_stack.append(('add_manual', onset, event_type, offset))
+        # Redraw timeline and refresh filtered onsets/counter immediately
+        self.update_onset_filter()
+        self.update_onset_info()
+        self.redraw()
+        # Go to the new event, ou à l'overlap si besoin
+        if go_to_overlap and overlap_onset is not None:
+            # Find the correct index in the current filtered list
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                if overlap_onset in self.filtered_onsets:
+                    idx = self.filtered_onsets.index(overlap_onset)
+                    self.goto_onset(idx)
+                else:
+                    # If the overlapping event is not in the current filter, show a message
+                    QMessageBox.information(self, "Overlap Info", f"The overlapping event (frame {overlap_onset}) is not visible in the current filter.\n\nYou can change the filter to see it.")
+            else:
+                # If no filtered list, use the full list
+                idx = self.onsets.index(overlap_onset)
+                self.goto_onset(idx)
+            # Don't open edit mode, just navigate to the overlapping event
+        else:
+            # Go to the next onset in the filtered list after adding
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                if onset in self.filtered_onsets:
+                    idx = self.filtered_onsets.index(onset)
+                    next_idx = min(idx + 1, len(self.filtered_onsets) - 1)
+                    self.goto_onset(next_idx)
+                else:
+                    # fallback: go to the new event in the full list
+                    new_idx = self.onsets.index(onset)
+                    self.goto_onset(new_idx)
+            else:
+                new_idx = self.onsets.index(onset)
+                self.goto_onset(new_idx)
         QMessageBox.information(self, "Success", f"Added {event_type} event from frame {onset} to {offset}")
+        # After successful add, reset dropdown to placeholder
+        self.event_type_combo.setCurrentIndex(0)
         
     def delete_current_onset(self):
         """Delete the currently selected onset"""
@@ -973,7 +1122,12 @@ class MotionAnnotator(QWidget):
         self.update_onset_info()  # Ne change pas l'onset courant
 
     def update_frame_info(self):
-        self.frame_info_label.setText(f"Frame: {self.current_frame} / {self.total_frames}")
+        # Update spinbox and total frames label
+        self.frame_spinbox.blockSignals(True)
+        self.frame_spinbox.setValue(self.current_frame)
+        self.frame_spinbox.blockSignals(False)
+        self.frame_spinbox.setMaximum(max(0, self.total_frames - 1))
+        self.total_frames_label.setText(str(self.total_frames))
         
     def update_onset_filter(self):
         # Update filtered_onsets based on both filter selections
@@ -1025,26 +1179,28 @@ class MotionAnnotator(QWidget):
     def prev_onset(self):
         if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
             self.filtered_onsets = self.onsets.copy()
-        # Cherche l'onset juste avant la frame courante
-        idx = 0
-        for i, onset in enumerate(self.filtered_onsets):
-            if onset < self.current_frame:
-                idx = i
-            else:
-                break
+        if not self.filtered_onsets:
+            return
+        # Si on est au premier onset, aller au dernier (cyclique)
+        if self.current_onset_idx == 0:
+            idx = len(self.filtered_onsets) - 1
+        else:
+            idx = self.current_onset_idx - 1
         self.goto_onset(idx)
 
     def next_onset(self):
         if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
             self.filtered_onsets = self.onsets.copy()
-        # Cherche l'onset juste après la frame courante
-        idx = None
-        for i, onset in enumerate(self.filtered_onsets):
-            if onset > self.current_frame:
-                idx = i
-                break
-        if idx is None:
-            idx = len(self.filtered_onsets) - 1  # Reste sur le dernier si pas trouvé
+        if not self.filtered_onsets:
+            return
+        # Aller à l'onset le plus proche strictement après la frame courante
+        current_frame = self.current_frame
+        next_candidates = [o for o in self.filtered_onsets if o > current_frame]
+        if next_candidates:
+            idx = self.filtered_onsets.index(next_candidates[0])
+        else:
+            # Si aucun après, cyclique : aller au premier onset
+            idx = 0
         self.goto_onset(idx)
 
     def update_onset_info(self):
@@ -1077,6 +1233,7 @@ class MotionAnnotator(QWidget):
         self.onset_info_label.setText(info_text)
         
     def validate_onset(self, validation):
+        self.unsaved_changes = True
         if not self.onsets:
             return
         # Toujours utiliser l'onset courant de la vue filtrée si disponible
@@ -1097,6 +1254,7 @@ class MotionAnnotator(QWidget):
                 self.current_offset_for_validation = offset
                 self.goto_offset_for_validation(offset)
                 self.update_onset_filter()  # MAJ immédiate
+                self.setFocus()
                 return
         elif validation == 'edited':
             self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
@@ -1113,17 +1271,24 @@ class MotionAnnotator(QWidget):
             self.accept_btn.setEnabled(False)
             self.reject_btn.setEnabled(False)
             self.edit_btn.setEnabled(False)
+            self.setFocus()
             return
         if self.current_onset_idx < len(self.onsets) - 1:
             self.next_onset()
+        self.setFocus()  # Restore focus to main window
 
     def start_edit_onset(self):
         # Si le widget d'édition est déjà visible, le fermer
         if self.edit_widget.isVisible():
             self.edit_widget.hide()
+            self.accept_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.setFocus()
             return
         # Sinon, comportement normal : ouvrir et préremplir
         if not self.onsets:
+            self.setFocus()
             return
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             current_onset = self.filtered_onsets[self.current_onset_idx]
@@ -1133,7 +1298,16 @@ class MotionAnnotator(QWidget):
         self.edit_onset_spinbox.setValue(current_onset)
         self.edit_offset_spinbox.setValue(offset)
         self.edit_widget.show()
+        self.accept_btn.setEnabled(False)
+        self.edit_btn.setEnabled(True)
+        self.reject_btn.setEnabled(False)
+        self.update_onset_status()  # Update status to show we're in edit mode
+        self.setFocus()
+        self.reject_btn.setEnabled(False)
+        self.setFocus()
+
     def finish_edit_onset(self):
+        self.unsaved_changes = True
         # Update only the onset frame, not the event type
         if not self.onsets:
             return
@@ -1151,6 +1325,39 @@ class MotionAnnotator(QWidget):
         event_type = self.onset_types[old_onset]
         # --- Capture the old offset before any changes ---
         old_offset_before_edit = self.timeline_canvas.event_offsets.get(old_onset, old_onset)
+        # Si seul l'offset change (onset identique)
+        if new_onset == old_onset and new_offset != old_offset_before_edit:
+            reply = QMessageBox.question(self, "Accept instead?", "Wouldn't you rather accept instead?\nIf you click Accept, the event will be validated as accepted with the new offset.", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply == QMessageBox.Yes:
+                # Appliquer la validation 'accepted' avec le nouvel offset
+                self.timeline_canvas.event_offsets[old_onset] = new_offset
+                for event_type, events in self.curated_events.items():
+                    for event in events:
+                        if event[0] == old_onset:
+                            event[1] = new_offset
+                prev_status = self.timeline_canvas.onset_validations.get(old_onset, 'pending')
+                if prev_status != 'accepted':
+                    self.undo_stack.append((old_onset, prev_status))
+                self.timeline_canvas.onset_validations[old_onset] = 'accepted'
+                self.edit_widget.hide()
+                self.accept_btn.setEnabled(True)
+                self.edit_btn.setEnabled(True)
+                self.reject_btn.setEnabled(True)
+                self.update_onset_status()
+                self.update_onset_filter()
+                self.update_onset_info()
+                self.update_performance_display()
+                self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+                # Aller à l'onset suivant
+                if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                    if self.current_onset_idx < len(self.filtered_onsets) - 1:
+                        self.goto_onset(self.current_onset_idx + 1)
+                else:
+                    if self.current_onset_idx < len(self.onsets) - 1:
+                        self.goto_onset(self.current_onset_idx + 1)
+                self.setFocus()
+                return
+            # Sinon, continuer l'édition normale (statut 'edited')
         del self.onset_types[old_onset]
         self.onset_types[new_onset] = event_type
         self.timeline_canvas.event_offsets[new_onset] = new_offset
@@ -1181,13 +1388,17 @@ class MotionAnnotator(QWidget):
             self.undo_stack.append((new_onset, prev_status, old_onset, orig_onset, old_offset_before_edit, self.original_offsets.get(old_onset, old_offset_before_edit)))
         self.timeline_canvas.onset_validations[new_onset] = 'edited'
         if hasattr(self, 'event_status'):
-            if shift < 6:
+            if shift < self.edit_threshold:
                 self.event_status[new_onset] = 1
             else:
                 self.event_status[new_onset] = 0.5
             if old_onset in self.event_status:
                 del self.event_status[old_onset]
         self.edit_widget.hide()
+        self.accept_btn.setEnabled(True)
+        self.edit_btn.setEnabled(True)
+        self.reject_btn.setEnabled(True)
+        self.update_onset_status()  # Update status when exiting edit mode
         self.onsets = sorted(self.onsets)
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             self.filtered_onsets = sorted(self.filtered_onsets)
@@ -1197,6 +1408,7 @@ class MotionAnnotator(QWidget):
         self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
         self.update_onset_info()
         self.update_performance_display()
+        # Aller à l'onset suivant après édition
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             if self.current_onset_idx < len(self.filtered_onsets) - 1:
                 self.goto_onset(self.current_onset_idx + 1)
@@ -1205,6 +1417,7 @@ class MotionAnnotator(QWidget):
                 self.goto_onset(self.current_onset_idx + 1)
         # Mise à jour du filtre et du compteur après édition
         self.update_onset_filter()
+        self.setFocus()  # Restore focus to main window
 
     def update_performance_display(self):
         # New: Score is 1 for accepted, -1 for rejected, 0.5 for edited, 0 for pending/manually added
@@ -1239,7 +1452,11 @@ Performance Score:
         if not self.curated_events:
             QMessageBox.warning(self, "Warning", "No onsets to save")
             return
-
+        overlaps = self.check_for_overlaps()
+        if overlaps:
+            overlap_str = "\n".join([f"{a1}-{b1} overlaps {a2}-{b2}" for a1, b1, a2, b2 in overlaps])
+            QMessageBox.critical(self, "Error: Overlapping Events", f"Cannot save/export. The following events overlap:\n\n{overlap_str}\n\nPlease fix all overlaps before saving.")
+            return
         # Create a flat list of events with 5 columns each
         export_events = []
         for event_type, events in self.curated_events.items():
@@ -1259,32 +1476,24 @@ Performance Score:
                     score = 0
                 export_events.append([onset, offset, event_type, status, score])
 
-        # Save to CSV file
-        fname, _ = QFileDialog.getSaveFileName(self, 'Save and Export Validation', '', 'CSV (*.csv)')
+        # Save to XLSX file only
+        fname, _ = QFileDialog.getSaveFileName(self, 'Save and Export Validation', '', 'Excel (*.xlsx)')
         if fname:
-            if not fname.endswith('.csv'):
-                fname += '.csv'
-            
-            # Create mousecraft output directory
+            if not fname.endswith('.xlsx'):
+                fname += '.xlsx'
             import os
+            import pandas as pd
             base_dir = os.path.dirname(fname)
             output_dir = os.path.join(base_dir, "mousecraft_output")
             os.makedirs(output_dir, exist_ok=True)
-            
-            # Get base filename without extension
             base_name = os.path.splitext(os.path.basename(fname))[0]
-            
-            # Save CSV in output directory
-            csv_path = os.path.join(output_dir, f"{base_name}.csv")
-            with open(csv_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['onset', 'offset', 'event_type', 'status', 'score'])
-                writer.writerows(export_events)
-            
+            # Save XLSX in output directory
+            xlsx_path = os.path.join(output_dir, f"{base_name}.xlsx")
+            df = pd.DataFrame(export_events, columns=pd.Index(['onset', 'offset', 'event_type', 'status', 'score']))
+            df.to_excel(xlsx_path, index=False)
             # Save numpy file in output directory
             np_path = os.path.join(output_dir, f"{base_name}.npy")
             np.save(np_path, np.array(export_events, dtype=object))
-            
             # Save performance metrics as JSON in output directory
             metrics_path = os.path.join(output_dir, f"{base_name}_metrics.json")
             metrics = self.performance_metrics
@@ -1300,20 +1509,21 @@ Performance Score:
             }
             with open(metrics_path, 'w') as f:
                 json.dump(results, f, indent=2)
-            
             # Create comparison plot and save it in output directory
             plot_path = os.path.join(output_dir, f"{base_name}_comparison_plot.png")
             self.create_validation_comparison_plot(export_events, save_path=plot_path)
-            
             # Show success message with all saved files
             QMessageBox.information(self, "Success", 
                 f"Validation exported successfully!\n\n"
                 f"Files saved in 'mousecraft_output' directory:\n"
-                f"• {base_name}.csv (CSV data)\n"
+                f"• {base_name}.xlsx (Excel data)\n"
                 f"• {base_name}.npy (NumPy data)\n"
                 f"• {base_name}_metrics.json (Performance metrics)\n"
                 f"• {base_name}_comparison_plot.png (Comparison plot)\n\n"
                 f"Directory: {output_dir}")
+            
+        # Après export, reset le flag
+        self.unsaved_changes = False
             
     def create_validation_comparison_plot(self, export_events, save_path=None):
         """Create a comparison plot showing original vs validated motion energy classification"""
@@ -1381,7 +1591,7 @@ Performance Score:
             elif event_type == 'active':
                 ax2.axvspan(onset, offset, color='yellow', alpha=alpha)
         
-        # Add validation markers
+        # Add validation markers with same logic as timeline
         for event in export_events:
             onset, offset, event_type, status, score = event
             if status == 'accepted':
@@ -1389,9 +1599,21 @@ Performance Score:
             elif status == 'rejected':
                 ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
             elif status == 'edited':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='orange', markersize=6)
+                # Use same logic as timeline for edited events
+                if hasattr(self, 'event_status') and onset in self.event_status:
+                    score = self.event_status[onset]
+                else:
+                    score = 0.5  # Default for edited events
+                
+                if score == 1:
+                    color = 'green'
+                elif score == 0.5:
+                    color = 'orange'
+                else:
+                    color = 'orange'  # Fallback
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
             elif status == 'manually added':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='#00bcd4', markersize=6)
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='#00CED1', markersize=6)
         
         ax2.set_title('Validated Motion Energy Classification', fontsize=14, fontweight='bold')
         ax2.set_xlabel('Frame', fontsize=12)
@@ -1406,8 +1628,9 @@ Performance Score:
             Line2D([0], [0], color='yellow', alpha=0.6, linewidth=10, label='Active'),
             Line2D([0], [0], marker='o', color='green', markersize=8, label='Accepted', linestyle=''),
             Line2D([0], [0], marker='o', color='red', markersize=8, label='Rejected', linestyle=''),
-            Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited', linestyle=''),
-            Line2D([0], [0], marker='o', color='#00bcd4', markersize=8, label='Manually Added', linestyle='')
+            Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited (orange)', linestyle=''),
+            Line2D([0], [0], marker='o', color='green', markersize=8, label='Edited (green)', linestyle=''),
+            Line2D([0], [0], marker='o', color='#00CED1', markersize=8, label='Manually Added', linestyle='')
         ]
         fig.legend(handles=legend_elements, bbox_to_anchor=(0.01, 0.99), loc='upper left', ncol=1, fontsize=11, borderaxespad=0.)
         
@@ -1440,12 +1663,16 @@ Performance Score:
     def load_framewise_table(self, fname):
         import pandas as pd
         df = pd.read_csv(fname) if fname.endswith('.csv') else pd.read_excel(fname)
+        # Clean and fill missing status values
+        if 'status' in df.columns:
+            df['status'] = df['status'].fillna('pending').astype(str).str.strip().str.lower()
         self.motion_energy = df['motion_energy'].values
         self.onsets = []
         self.onset_types = {}
         self.timeline_canvas.event_offsets = {}
         self.event_status = {}
         self.curated_events = {}
+        self.timeline_canvas.onset_validations = {}
 
         for event_type in ['active', 'twitch']:
             arr = df[event_type].values
@@ -1455,30 +1682,69 @@ Performance Score:
                     onset = i
                     in_event = True
                 elif val == 0 and in_event:
-                    offset = i
-                    self.onsets.append(onset)
-                    self.onset_types[onset] = event_type
-                    self.timeline_canvas.event_offsets[onset] = offset
-                    self.event_status[onset] = 1  # default to accepted for now
+                    offset = i  # Revert: offset is the first frame after the event (exclusive)
+                    if onset not in self.onsets:
+                        self.onsets.append(onset)
+                        self.onset_types[onset] = event_type
+                        self.timeline_canvas.event_offsets[onset] = offset
+                    status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
+                    score = df.at[onset, 'score'] if 'score' in df.columns else 0
+                    if status == 'edited':
+                        gui_status = 'edited'
+                        gui_score = 1 if float(score) == 1 else 0.5
+                    elif status == 'accepted':
+                        gui_status = 'accepted'
+                        gui_score = 1
+                    elif status == 'rejected':
+                        gui_status = 'rejected'
+                        gui_score = -1
+                    elif status == 'manually added':
+                        gui_status = 'manually added'
+                        gui_score = 0
+                    else:
+                        gui_status = 'pending'
+                        gui_score = 0
+                    self.timeline_canvas.onset_validations[onset] = gui_status
+                    self.event_status[onset] = gui_score
                     if event_type not in self.curated_events:
                         self.curated_events[event_type] = []
                     self.curated_events[event_type].append([onset, offset, 1])
                     in_event = False
             if in_event:
-                offset = len(arr)
-                self.onsets.append(onset)
-                self.onset_types[onset] = event_type
-                self.timeline_canvas.event_offsets[onset] = offset
-                self.event_status[onset] = 1
+                offset = len(arr)  # Revert: offset is the first frame after the event (exclusive)
+                if onset not in self.onsets:
+                    self.onsets.append(onset)
+                    self.onset_types[onset] = event_type
+                    self.timeline_canvas.event_offsets[onset] = offset
+                status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
+                score = df.at[onset, 'score'] if 'score' in df.columns else 0
+                if status == 'edited':
+                    gui_status = 'edited'
+                    gui_score = 1 if float(score) == 1 else 0.5
+                elif status == 'accepted':
+                    gui_status = 'accepted'
+                    gui_score = 1
+                elif status == 'rejected':
+                    gui_status = 'rejected'
+                    gui_score = -1
+                elif status == 'manually added':
+                    gui_status = 'manually added'
+                    gui_score = 0
+                else:
+                    gui_status = 'pending'
+                    gui_score = 0
+                self.timeline_canvas.onset_validations[onset] = gui_status
+                self.event_status[onset] = gui_score
                 if event_type not in self.curated_events:
                     self.curated_events[event_type] = []
                 self.curated_events[event_type].append([onset, offset, 1])
 
-        self.onsets = sorted(self.onsets)
+        self.onsets = sorted(set(self.onsets))
         self.current_onset_idx = 0
         self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
         if self.onsets:
             self.goto_onset(0)
+        self.undo_btn.setEnabled(True)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1524,29 +1790,36 @@ Performance Score:
         # Zoom in on the x-axis by a factor of 2, centered on current frame
         ax = self.timeline_canvas.ax
         xlim = ax.get_xlim()
-        center = self.timeline_canvas.current_frame
+        center = self.current_frame  # Use self.current_frame instead of timeline_canvas.current_frame
         width = xlim[1] - xlim[0]
         new_width = width / 2
         new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
         ax.set_xlim(new_xlim)
         self.timeline_canvas.draw()
+        self.timeline_canvas.flush_events()  # Force immediate update
+        
     def zoom_out_timeline(self):
         # Zoom out on the x-axis by a factor of 2, centered on current frame
         ax = self.timeline_canvas.ax
         xlim = ax.get_xlim()
-        center = self.timeline_canvas.current_frame
+        center = self.current_frame  # Use self.current_frame instead of timeline_canvas.current_frame
         width = xlim[1] - xlim[0]
         new_width = width * 2
         new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
         ax.set_xlim(new_xlim)
         self.timeline_canvas.draw()
+        self.timeline_canvas.flush_events()  # Force immediate update
 
     def reset_zoom_timeline(self):
         # Reset the x and y axis to initial state (full view)
         ax = self.timeline_canvas.ax
         ax.set_xlim(0, max(self.timeline_canvas.total_frames, 1000))
-        ax.set_ylim(0, 1.2)
+        if hasattr(self, 'motion_energy') and self.motion_energy is not None:
+            ax.set_ylim(0, max(self.motion_energy) * 1.2)
+        else:
+            ax.set_ylim(0, 1.2)
         self.timeline_canvas.draw()
+        self.timeline_canvas.flush_events()  # Force immediate update
 
     def zoom_in_video(self):
         """Zoom in on the video"""
@@ -1575,6 +1848,10 @@ Performance Score:
             if offset == self.current_frame:
                 is_offset = True
                 break
+        
+        # Check if we're in edit mode
+        is_editing = hasattr(self, 'edit_widget') and self.edit_widget.isVisible()
+        
         if onset_type:
             self.onset_status_label.setText(f"Frame {self.current_frame}: {onset_type.upper()} ONSET")
             # Color code based on onset type
@@ -1584,7 +1861,10 @@ Performance Score:
                 self.onset_status_label.setStyleSheet("background-color: yellow; color: black; padding: 5px; border: 1px solid gray; font-weight: bold;")
         elif is_offset:
             # Affiche l'offset en rouge
-            self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET</span>")
+            if is_editing:
+                self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET (EDITING)</span>")
+            else:
+                self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET</span>")
             self.onset_status_label.setStyleSheet("background-color: #ffcccc; color: #ff4444; padding: 5px; border: 1px solid gray; font-weight: bold;")
         else:
             self.onset_status_label.setText(f"Frame {self.current_frame}: No onset")
@@ -1698,66 +1978,145 @@ Performance Score:
         self.update_onset_filter()  # MAJ immédiate
 
     def undo_last_action(self):
-        print("UNDO STACK:", self.undo_stack)
+        self.unsaved_changes = True
         if not self.undo_stack:
-            print("Undo stack is empty!")
             QMessageBox.information(self, "Undo", "Nothing to undo!")
             return
-        last = self.undo_stack.pop()
-        if len(last) == 6:
-            onset, prev_status, old_onset, orig_onset, old_offset_before_edit, orig_offset = last
-            # Undo edit: revert onset to old_onset, restore original_onsets, event_status, etc.
-            # Remove new_onset, restore old_onset
+        action = self.undo_stack[-1]  # Peek to show info before popping
+        # Determine which event and info to show
+        if isinstance(action, tuple) and len(action) == 4 and action[0] == 'add_manual':
+            _, onset, event_type, offset = action
+            status = self.timeline_canvas.onset_validations.get(onset, 'manually added')
+        elif isinstance(action, tuple) and len(action) == 6:
+            new_onset, prev_status, old_onset, orig_onset, old_offset, orig_offset = action
+            onset = new_onset
+            offset = self.timeline_canvas.event_offsets.get(new_onset, '?')
+            status = self.timeline_canvas.onset_validations.get(new_onset, 'pending')
+        elif isinstance(action, tuple) and len(action) == 2:
+            onset, prev_status = action
+            offset = self.timeline_canvas.event_offsets.get(onset, '?')
+            status = self.timeline_canvas.onset_validations.get(onset, 'pending')
+        else:
+            onset = '?'
+            offset = '?'
+            status = '?'
+        reply = QMessageBox.question(self, "Confirm Undo", f"Are you sure you want to undo onset {onset} to offset {offset} (status: {status})?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        action = self.undo_stack.pop()
+        
+        # Cas ajout manuel : supprimer l'événement ajouté
+        if isinstance(action, tuple) and len(action) == 4 and action[0] == 'add_manual':
+            _, onset, event_type, offset = action
+            # Remove from timeline
+            self.timeline_canvas.remove_event(onset)
+            # Remove from data structures
             if onset in self.onsets:
-                idx = self.onsets.index(onset)
-                self.onsets[idx] = old_onset
-                self.onsets = sorted(self.onsets)
-            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-                if onset in self.filtered_onsets:
-                    idx = self.filtered_onsets.index(onset)
-                    self.filtered_onsets[idx] = old_onset
-                    self.filtered_onsets = sorted(self.filtered_onsets)
-            self.onset_types[old_onset] = self.onset_types.pop(onset)
-            self.timeline_canvas.event_offsets[old_onset] = old_offset_before_edit
+                self.onsets.remove(onset)
+            if onset in self.onset_types:
+                del self.onset_types[onset]
             if onset in self.timeline_canvas.event_offsets:
                 del self.timeline_canvas.event_offsets[onset]
-            self.original_onsets[old_onset] = orig_onset
-            if onset in self.original_onsets:
-                del self.original_onsets[onset]
-            self.original_offsets[old_onset] = orig_offset
-            if onset in self.original_offsets:
-                del self.original_offsets[onset]
-            if hasattr(self, 'event_status'):
-                self.event_status[old_onset] = 0
-                if onset in self.event_status:
-                    del self.event_status[onset]
-            self.timeline_canvas.onset_validations[old_onset] = prev_status
             if onset in self.timeline_canvas.onset_validations:
                 del self.timeline_canvas.onset_validations[onset]
-            self.current_onset_idx = self.onsets.index(old_onset)
-            self.goto_onset(self.current_onset_idx)
+            # Remove from curated events
+            for event_type, events in self.curated_events.items():
+                self.curated_events[event_type] = [event for event in events if event[0] != onset]
+            # Refresh view and counter
+            self.update_onset_filter()
+            self.update_onset_info()
             self.redraw()
+            QMessageBox.information(self, "Event deleted", "This manually added event has been successfully deleted.")
             return
-        # fallback to previous undo logic
-        onset, prev_status = last
-        self.timeline_canvas.onset_validations[onset] = prev_status
-        if onset in self.onsets:
-            self.current_onset_idx = self.onsets.index(onset)
-            self.goto_onset(self.current_onset_idx)
-        self.redraw()
+            
+        # Cas édition d'onset : restaurer l'onset et offset précédents
+        if isinstance(action, tuple) and len(action) == 6:
+            new_onset, prev_status, old_onset, orig_onset, old_offset, orig_offset = action
+            # Restore old onset and offset
+            if new_onset in self.onsets:
+                idx = self.onsets.index(new_onset)
+                self.onsets[idx] = old_onset
+            # Restore event type
+            event_type = self.onset_types.get(new_onset, '')
+            if new_onset in self.onset_types:
+                del self.onset_types[new_onset]
+            self.onset_types[old_onset] = event_type
+            # Restore offset
+            if new_onset in self.timeline_canvas.event_offsets:
+                del self.timeline_canvas.event_offsets[new_onset]
+            self.timeline_canvas.event_offsets[old_onset] = old_offset
+            # Restore validation status
+            if new_onset in self.timeline_canvas.onset_validations:
+                del self.timeline_canvas.onset_validations[new_onset]
+            self.timeline_canvas.onset_validations[old_onset] = prev_status
+            # Restore original mappings
+            self.original_onsets[old_onset] = orig_onset
+            if new_onset in self.original_onsets:
+                del self.original_onsets[new_onset]
+            self.original_offsets[old_onset] = orig_offset
+            # Update curated events (force offset update for all matching onsets)
+            for event_type, events in self.curated_events.items():
+                for event in events:
+                    if event[0] == new_onset or event[0] == old_onset:
+                        event[0] = old_onset
+                        event[1] = old_offset
+            # Remove from edited_onsets
+            if hasattr(self, 'edited_onsets') and new_onset in self.edited_onsets:
+                del self.edited_onsets[new_onset]
+            # Remove from event_status
+            if hasattr(self, 'event_status') and new_onset in self.event_status:
+                del self.event_status[new_onset]
+            # Sort onsets
+            self.onsets = sorted(self.onsets)
+            # Update current index
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                if old_onset in self.filtered_onsets:
+                    self.current_onset_idx = self.filtered_onsets.index(old_onset)
+            else:
+                if old_onset in self.onsets:
+                    self.current_onset_idx = self.onsets.index(old_onset)
+            # Refresh view
+            self.update_onset_filter()
+            self.update_onset_info()
+            self.redraw()
+            # Show both onset and offset in the message
+            new_offset_val = self.timeline_canvas.event_offsets.get(new_onset, '?')
+            QMessageBox.information(self, "Undo", f"Restored {new_onset} to {new_offset_val}, from {old_onset} to {old_offset}")
+            return
+            
+        # Cas validation simple (accept/reject) : restaurer le statut précédent
+        if isinstance(action, tuple) and len(action) == 2:
+            onset, prev_status = action
+            # Restore previous validation status
+            self.timeline_canvas.onset_validations[onset] = prev_status
+            # Remove from event_status if it was there
+            if hasattr(self, 'event_status') and onset in self.event_status:
+                del self.event_status[onset]
+            # Refresh view
+            self.update_onset_filter()
+            self.update_onset_info()
+            self.redraw()
+            QMessageBox.information(self, "Undo", f"Restored status to '{prev_status}' for onset {onset}")
+            return
+            
+        # Cas par défaut
+        QMessageBox.warning(self, "Undo", "Unknown action type, cannot undo.")
 
     def accept_and_toggle_offset(self):
         # Toggle offset menu: ouvrir/fermer sans jamais changer le statut
         if self.offset_validation_widget.isVisible():
             self.offset_validation_widget.hide()
-            if hasattr(self, 'offset_edit_widget') and self.offset_edit_widget is not None:
-                self.offset_edit_widget.setParent(None)
-                self.offset_edit_widget.deleteLater()
-                self.offset_edit_widget = None
-            self.setFocus()  # Focus principal après accept
+            self.accept_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.setFocus()
             return
+        # Sinon, ouvrir le menu et désactiver les autres boutons
         self.offset_validation_widget.show()
-        self.setFocus()  # Focus principal après accept
+        self.accept_btn.setEnabled(True)
+        self.edit_btn.setEnabled(False)
+        self.reject_btn.setEnabled(False)
+        self.setFocus()
 
     def open_accept_menu(self, onset):
         self.current_onset_for_menu = onset
@@ -1775,6 +2134,7 @@ Performance Score:
         self.offset_validation_widget.hide()
         self.update_buttons_state(onset)
         self.redraw()
+        self.setFocus()  # Restore focus to main window
 
     def close_accept_menu(self):
         self.menu_open = False
@@ -1840,12 +2200,9 @@ Performance Score:
         # Sauvegarde le fichier
         fname, _ = QFileDialog.getSaveFileName(self, 'Export Project (MF)', '', 'Excel (*.xlsx);;CSV (*.csv)')
         if fname:
-            if fname.endswith('.csv'):
-                df.to_csv(fname, index=False)
-            else:
-                if not fname.endswith('.xlsx'):
-                    fname += '.xlsx'
-                df.to_excel(fname, index=False)
+            if not fname.endswith('.xlsx'):
+                fname += '.xlsx'
+            df.to_excel(fname, index=False)
 
     def choose_export_path(self):
         dir_path = QFileDialog.getExistingDirectory(self, 'Select Export Directory')
@@ -1859,6 +2216,11 @@ Performance Score:
         if not dir_path:
             QMessageBox.warning(self, "Export", "Please choose an export directory first.")
             return
+        overlaps = self.check_for_overlaps()
+        if overlaps:
+            overlap_str = "\n".join([f"{a1}-{b1} overlaps {a2}-{b2}" for a1, b1, a2, b2 in overlaps])
+            QMessageBox.critical(self, "Error: Overlapping Events", f"Cannot save/export. The following events overlap:\n\n{overlap_str}\n\nPlease fix all overlaps before saving.")
+            return
         output_dir = os.path.join(dir_path, 'mousecraft_output')
         os.makedirs(output_dir, exist_ok=True)
         if not hasattr(self, 'input_classification_df') or self.input_classification_df is None:
@@ -1870,53 +2232,43 @@ Performance Score:
         mf_df = input_df.copy()
         n_frames = len(mf_df)
         for col in ['active', 'twitch', 'complex']:
-            if col not in mf_df.columns:
-                mf_df[col] = 0
+            # if col not in mf_df.columns:
+            mf_df[col] = 0
         mf_df['status'] = [''] * n_frames
-        mf_df['score'] = [''] * n_frames  # score vide partout
-        # Traite les onsets édités pour effacer tous les anciens segments (avec contrôle de bornes)
-        edited_onsets = getattr(self, 'edited_onsets', {})
-        for new_onset, old_segments in edited_onsets.items():
-            event_type = self.onset_types.get(new_onset, '')
-            if event_type in ('active', 'twitch', 'complex'):
-                for old_onset, old_offset in old_segments:
-                    start = max(0, min(old_onset, old_offset))
-                    end = min(n_frames - 1, max(old_onset, old_offset))
-                    mf_df.loc[start:end, event_type] = 0
-        # Pour chaque event_type, si au moins un onset validé/rejeté, mets toute la colonne à 0
-        for event_type in ['active', 'twitch', 'complex']:
-            validated_onsets = [onset for onset in self.onsets
-                                if self.onset_types.get(onset, '') == event_type and
-                                self.timeline_canvas.onset_validations.get(onset, 'pending') in ('accepted', 'edited', 'rejected')]
-            if validated_onsets:
-                mf_df[event_type] = 0  # On efface tout
-        # Puis on pose les 1 pour les onsets validés/édités
+        mf_df['score'] = [''] * n_frames
+        # Pour chaque événement, pose les 1 de onset à offset selon la logique demandée
         for onset in self.onsets:
-            offset = self.timeline_canvas.event_offsets.get(onset, onset)
             event_type = self.onset_types.get(onset, '')
             status = self.timeline_canvas.onset_validations.get(onset, 'pending')
-            if event_type in ('active', 'twitch', 'complex'):
-                if status in ('accepted', 'edited'):
-                    mf_df.loc[onset:offset, event_type] = 1
-                # Si rejected, on laisse à 0 (déjà fait)
-                # Si pending, on ne touche pas (préserve l'input)
-            mf_df.at[onset, 'status'] = status
+            # Always use the current (possibly edited) onset and offset
+            start = min(onset, self.timeline_canvas.event_offsets.get(onset, onset))
+            end = max(onset, self.timeline_canvas.event_offsets.get(onset, onset))
+            if event_type in ['active', 'twitch', 'complex']:
+                mf_df.loc[start:end, event_type] = 1
+            # Write status and score only at the onset frame
             if status == 'accepted':
                 score = 1
+                status_label = 'accepted'
             elif status == 'rejected':
                 score = -1
+                status_label = 'rejected'
             elif status == 'edited':
-                score = 0.5
+                if self.event_status.get(onset, 0.5) == 1:
+                    score = 1
+                else:
+                    score = 0.5
+                status_label = 'edited'
             elif status == 'manually added':
                 score = 0
+                status_label = 'manually added'
             else:
                 score = 0
+                status_label = status
+            mf_df.at[onset, 'status'] = status_label
             mf_df.at[onset, 'score'] = score
         mf_path = os.path.join(output_dir, f"validation_MF{suffix}.xlsx")
         mf_df.to_excel(mf_path, index=False)
-        # Sauvegarde aussi en CSV et en numpy
-        mf_csv_path = os.path.splitext(mf_path)[0] + ".csv"
-        mf_df.to_csv(mf_csv_path, index=False)
+        # Sauvegarde aussi en numpy uniquement
         import numpy as np
         mf_npy_path = os.path.splitext(mf_path)[0] + ".npy"
         np.save(mf_npy_path, mf_df.to_numpy())
@@ -1939,42 +2291,251 @@ Performance Score:
         hf_df = pd.DataFrame(export_events, columns=pd.Index(['onset', 'offset', 'event_type', 'status', 'score']))
         hf_path = os.path.join(output_dir, f"validation_HF{suffix}.xlsx")
         hf_df.to_excel(hf_path, index=False)
-        # Sauvegarde aussi en CSV et en numpy
-        hf_csv_path = os.path.splitext(hf_path)[0] + ".csv"
-        hf_df.to_csv(hf_csv_path, index=False)
+        # Sauvegarde aussi en numpy uniquement
         hf_npy_path = os.path.splitext(hf_path)[0] + ".npy"
         np.save(hf_npy_path, hf_df.to_numpy())
         plot_path = os.path.join(output_dir, f"validation_comparison_plot{suffix}.png")
         self.create_validation_comparison_plot(export_events, save_path=plot_path)
+        # Add final classification plot only if no pending events
+        if not has_pending:
+            # Remove all _pending files in output_dir
+            for fname in os.listdir(output_dir):
+                if '_pending' in fname:
+                    try:
+                        os.remove(os.path.join(output_dir, fname))
+                    except Exception as e:
+                        print(f"Could not remove {fname}: {e}")
+            final_plot_path = os.path.join(output_dir, f"final_classification_plot{suffix}.png")
+            self.create_final_classification_plot(export_events, save_path=final_plot_path)
+        # Export pie chart of event status distribution
+        pie_chart_path = os.path.join(output_dir, f"validation_status_pie{suffix}.png")
+        self.create_validation_pie_chart(export_events, save_path=pie_chart_path)
         # Export metrics JSON
-        metrics = getattr(self, 'performance_metrics', {})
-        total = metrics.get('true_positives', 0) + metrics.get('false_positives', 0)
-        precision = metrics.get('true_positives', 0) / total if total > 0 else 0
+        true_positives = sum(1 for event in export_events if event[3] in ('accepted', 'edited'))
+        false_positives = sum(1 for event in export_events if event[3] == 'rejected')
+        total = true_positives + false_positives
+        precision = true_positives / total if total > 0 else 0
         results = {
-            'performance_metrics': metrics,
+            'performance_metrics': {
+                'true_positives': true_positives,
+                'false_positives': false_positives
+            },
             'precision': precision,
             'total_annotated': total
         }
         metrics_path = os.path.join(output_dir, f"validation_metrics{suffix}.json")
         with open(metrics_path, 'w') as f:
             json.dump(results, f, indent=2)
-        QMessageBox.information(self, "Export", f"Exported to: {output_dir}\n\n"
-            f"- {os.path.basename(mf_path)}\n"
-            f"- {os.path.splitext(os.path.basename(mf_path))[0]}.csv\n"
-            f"- {os.path.splitext(os.path.basename(mf_path))[0]}.npy\n"
-            f"- {os.path.basename(hf_path)}\n"
-            f"- {os.path.splitext(os.path.basename(hf_path))[0]}.csv\n"
-            f"- {os.path.splitext(os.path.basename(hf_path))[0]}.npy\n"
-            f"- {os.path.basename(plot_path)}\n"
-            f"- {os.path.basename(metrics_path)}")
+        msg = f"Exported to: {output_dir}\n\n"
+        msg += f"- {os.path.basename(mf_path)}\n"
+        msg += f"- {os.path.splitext(os.path.basename(mf_path))[0]}.npy\n"
+        msg += f"- {os.path.basename(hf_path)}\n"
+        msg += f"- {os.path.splitext(os.path.basename(hf_path))[0]}.npy\n"
+        msg += f"- {os.path.basename(plot_path)}\n"
+        if not has_pending:
+            msg += f"- {os.path.basename(final_plot_path)}\n"
+        msg += f"- {os.path.basename(metrics_path)}"
+        QMessageBox.information(self, "Export", msg)
+        # Après export, reset le flag
+        self.unsaved_changes = False
+
+    def create_final_classification_plot(self, export_events, save_path=None):
+        """Create a plot showing only the final classification (excluding rejected events) and motion energy. No color markers."""
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+        if self.motion_energy is None:
+            QMessageBox.warning(self, "Warning", "No motion energy data available for final classification plot")
+            return
+        # Filter out rejected events
+        final_events = [e for e in export_events if e[3] != 'rejected']
+        fig, ax = plt.subplots(figsize=(15, 3.5))
+        ax.plot(np.arange(len(self.motion_energy)), self.motion_energy, color='blue', linewidth=1, alpha=0.7)
+        for event in final_events:
+            onset, offset, event_type, status, score = event
+            if event_type == 'twitch':
+                ax.axvspan(onset, offset, color='purple', alpha=0.6)
+            elif event_type == 'active':
+                ax.axvspan(onset, offset, color='yellow', alpha=0.6)
+        ax.set_title('Final Motion Energy Classification (Rejected Events Hidden)', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Frame', fontsize=12)
+        ax.set_ylabel('Motion Energy', fontsize=12)
+        ax.set_xlim(0, len(self.motion_energy))
+        ax.set_ylim(0, max(self.motion_energy) * 1.2)
+        ax.grid(True, alpha=0.3)
+        legend_elements = [
+            Line2D([0], [0], color='purple', alpha=0.6, linewidth=10, label='Twitch'),
+            Line2D([0], [0], color='yellow', alpha=0.6, linewidth=10, label='Active'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', fontsize=11)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+
+    def closeEvent(self, event):
+        if getattr(self, 'unsaved_changes', False):
+            reply = QMessageBox.question(self, "Save before exit?", "Do you want to save your work before exiting?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if reply == QMessageBox.Yes:
+                # Ouvre le sélecteur d'export si pas déjà choisi
+                if not self.export_path_lineedit.text():
+                    self.choose_export_path()
+                    # Si l'utilisateur annule le choix du dossier, ne pas exporter
+                    if not self.export_path_lineedit.text():
+                        event.ignore()
+                        return
+                self.export_all_outputs()
+                event.accept()
+                return
+            else:
+                event.accept()
+                return
+        event.accept()
+
+    def check_for_overlaps(self):
+        """Return a list of tuples (onset1, offset1, onset2, offset2) for all overlapping event pairs, ignoring rejected events."""
+        overlaps = []
+        # Only consider events that are not rejected
+        valid_onsets = [onset for onset in self.onsets if self.timeline_canvas.onset_validations.get(onset, 'pending') not in ('rejected',)]
+        events = [(onset, self.timeline_canvas.event_offsets.get(onset, onset)) for onset in valid_onsets]
+        events = sorted(events, key=lambda x: x[0])
+        for i in range(len(events)):
+            onset1, offset1 = events[i]
+            for j in range(i+1, len(events)):
+                onset2, offset2 = events[j]
+                # If onset2 < offset1, they overlap
+                if onset2 < offset1:
+                    overlaps.append((onset1, offset1, onset2, offset2))
+                else:
+                    break
+        return overlaps
+
+    def show_firework_animation(self):
+        """Show a firework GIF animation for 2.5 seconds when all pending events are resolved."""
+        dialog = QDialog(self)
+        dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        dialog.setAttribute(Qt.WA_TranslucentBackground)
+        dialog.setModal(True)
+        label = QLabel(dialog)
+        movie = QMovie("Fireworks.gif")
+        label.setMovie(movie)
+        label.setAlignment(Qt.AlignCenter)
+        dialog.resize(400, 400)
+        label.resize(400, 400)
+        movie.start()
+        dialog.show()
+        QTimer.singleShot(2500, dialog.accept)
+
+    def set_event_status(self, onset, status):
+        # ... existing code for setting status ...
+        self.timeline_canvas.onset_validations[onset] = status
+        # ... any other logic ...
+        # Check if there are no more pending events
+        if not any(self.timeline_canvas.onset_validations.get(o, 'pending') == 'pending' for o in self.onsets):
+            self.show_firework_animation()
+        # ... rest of the function ...
+
+    def show_mouse_animation(self):
+        """Show a mouse image moving from left to right for 2.5 seconds when half or more events are no longer pending."""
+        from PyQt5.QtWidgets import QDialog, QLabel
+        from PyQt5.QtCore import Qt, QTimer
+        from PyQt5.QtGui import QMovie, QPixmap
+        import os
+        duration_ms = 2500
+        steps = 50
+        interval = duration_ms // steps
+        dialog_width = 500
+        dialog_height = 200
+        mouse_width = 100
+        mouse_height = 100
+        dialog = QDialog(self)
+        dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        dialog.setAttribute(Qt.WA_TranslucentBackground)
+        dialog.setModal(True)
+        dialog.resize(dialog_width, dialog_height)
+        label = QLabel(dialog)
+        label.resize(mouse_width, mouse_height)
+        label.setAttribute(Qt.WA_TranslucentBackground)
+        # Support animated or static image
+        if os.path.splitext("mouse.webp")[1].lower() in [".gif", ".webp"]:
+            movie = QMovie("mouse.webp")
+            label.setMovie(movie)
+            movie.start()
+        else:
+            pixmap = QPixmap("mouse.webp")
+            label.setPixmap(pixmap.scaled(mouse_width, mouse_height, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # Start at left
+        label.move(0, (dialog_height - mouse_height) // 2)
+        dialog.show()
+        # Animate
+        def animate(step=0):
+            if step > steps:
+                dialog.accept()
+                return
+            x = int((dialog_width - mouse_width) * step / steps)
+            label.move(x, (dialog_height - mouse_height) // 2)
+            QTimer.singleShot(interval, lambda: animate(step + 1))
+        animate()
+
+    def frame_spinbox_changed(self, value):
+        # Jump to the frame entered by the user
+        self.current_frame = value
+        self.frame_slider.setValue(value)
+        self.show_frame(value)
+        self.timeline_canvas.current_frame = value
+        self.timeline_canvas.update_timeline()
+        self.update_onset_info()
+
+    def create_validation_pie_chart(self, export_events, save_path=None):
+        """Create and save a pie chart showing the percentage of accepted, edited (<X, >X), pending, rejected, and manually added events."""
+        import matplotlib.pyplot as plt
+        from collections import Counter
+        # Count statuses with edit threshold
+        edit_threshold = getattr(self, 'edit_threshold', 5)
+        status_buckets = []
+        for event in export_events:
+            status = event[3]
+            score = event[4]
+            if status == 'edited':
+                # Determine shift (score==1 means < threshold, 0.5 means > threshold)
+                # If you have the actual shift, use it; otherwise, use score as proxy
+                if score == 1:
+                    status_buckets.append(f'edited <{edit_threshold}')
+                else:
+                    status_buckets.append(f'edited >{edit_threshold}')
+            else:
+                status_buckets.append(status)
+        counter = Counter(status_buckets)
+        labels = []
+        sizes = []
+        colors = []
+        color_map = {
+            'accepted': '#4CAF50',      # Green
+            f'edited <{edit_threshold}': '#FFD54F',  # Light yellow
+            f'edited >{edit_threshold}': '#FFA726',  # Orange
+            'pending': '#90A4AE',       # Gray-blue
+            'rejected': '#F44336',      # Red
+            'manually added': '#00CED1' # Turquoise
+        }
+        for status in ['accepted', f'edited <{edit_threshold}', f'edited >{edit_threshold}', 'pending', 'rejected', 'manually added']:
+            if counter[status] > 0:
+                labels.append(f"{status.capitalize()} ({counter[status]})")
+                sizes.append(counter[status])
+                colors.append(color_map.get(status, '#BDBDBD'))
+        if not sizes:
+            return  # Nothing to plot
+        plt.figure(figsize=(6, 6))
+        plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=140, textprops={'fontsize': 12})
+        plt.title('Event Validation Status Distribution', fontsize=15, fontweight='bold')
+        plt.axis('equal')
+        if save_path:
+            plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        plt.close()
+
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     annotator = MotionAnnotator()
-    # 3. Visualiser la superposition de widgets
-    annotator.play_btn.setStyleSheet("background-color: rgba(0,255,0,0.3); border: 2px solid black;")
-    annotator.pause_btn.setStyleSheet("background-color: rgba(255,0,0,0.3); border: 2px solid black;")
-    annotator.stop_btn.setStyleSheet("background-color: rgba(0,0,255,0.3); border: 2px solid black;")
     # Force la mise au premier plan
     annotator.pause_btn.raise_()
     annotator.show()
