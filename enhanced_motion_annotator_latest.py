@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import QStyle
 import csv
 from PyQt5.QtWidgets import QScrollArea
 from collections import Counter
+import random
 
 class DraggableTimeline(FigureCanvas):
     """Custom matplotlib canvas with draggable timeline"""
@@ -277,6 +278,7 @@ class MotionAnnotator(QWidget):
         self.init_ui()
         self.setup_timer()
         self.unsaved_changes = False  # Track unsaved changes
+        self.setup_auto_save(interval_minutes=20)
         
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -523,14 +525,17 @@ class MotionAnnotator(QWidget):
         self.accept_btn = QPushButton("✓ Accept")
         self.edit_btn = QPushButton("✎ Edit")
         self.reject_btn = QPushButton("✗ Reject")
+        self.change_type_btn = QPushButton("Change Type")
         self.undo_btn = QPushButton("↩ Undo")
         self.accept_btn.clicked.connect(self.accept_and_toggle_offset)
         self.edit_btn.clicked.connect(self.start_edit_onset)
         self.reject_btn.clicked.connect(lambda: self.validate_onset('rejected'))
+        self.change_type_btn.clicked.connect(self.show_change_type_dropdown)
         self.undo_btn.clicked.connect(self.undo_last_action)
         validation_layout.addWidget(self.accept_btn)
         validation_layout.addWidget(self.edit_btn)
         validation_layout.addWidget(self.reject_btn)
+        validation_layout.addWidget(self.change_type_btn)
         validation_layout.addWidget(self.undo_btn)
         onset_layout.addLayout(validation_layout)
 
@@ -649,6 +654,7 @@ class MotionAnnotator(QWidget):
             parent_folder = os.path.basename(os.path.dirname(fname))
             grandparent_folder = os.path.basename(os.path.dirname(os.path.dirname(fname)))
             self.video_folder_label.setText(f"Video folder : {grandparent_folder} / {parent_folder}")
+            self.maybe_start_auto_save()
         
     def load_motion_energy(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Load Motion Energy', '', 'CSV/Excel (*.csv *.xlsx *.npy)')
@@ -673,6 +679,7 @@ class MotionAnnotator(QWidget):
             # Pad to divisible by 5 and average
             self.prepare_motion_energy()
             self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+            self.maybe_start_auto_save()
             
     def prepare_motion_energy(self):
         """Pad motion energy to divisible by 5 and average"""
@@ -719,6 +726,7 @@ class MotionAnnotator(QWidget):
                     else:
                         QMessageBox.warning(self, "Warning", "File format not recognized. Please provide a valid classification file.")
                 self.undo_btn.setEnabled(True)
+                self.maybe_start_auto_save()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load classifications: {str(e)}")
             import traceback
@@ -801,6 +809,7 @@ class MotionAnnotator(QWidget):
             for onset in active_onsets:
                 # Find corresponding offset
                 offset = self.find_corresponding_offset(onset, active_offsets)
+                offset = offset - 1 if offset > onset else onset  # Make offset inclusive
                 self.onsets.append(onset)
                 self.onset_types[onset] = 'active'
                 self.timeline_canvas.event_offsets[onset] = offset
@@ -818,6 +827,7 @@ class MotionAnnotator(QWidget):
             for onset in twitch_onsets:
                 # Find corresponding offset
                 offset = self.find_corresponding_offset(onset, twitch_offsets)
+                offset = offset - 1 if offset > onset else onset
                 self.onsets.append(onset)
                 self.onset_types[onset] = 'twitch'
                 self.timeline_canvas.event_offsets[onset] = offset
@@ -834,6 +844,7 @@ class MotionAnnotator(QWidget):
             for onset in complex_onsets:
                 # Find corresponding offset
                 offset = self.find_corresponding_offset(onset, complex_offsets)
+                offset = offset - 1 if offset > onset else onset
                 self.onsets.append(onset)
                 self.onset_types[onset] = 'complex'
                 self.timeline_canvas.event_offsets[onset] = offset
@@ -916,7 +927,6 @@ class MotionAnnotator(QWidget):
             
     def add_manual_event(self):
         self.unsaved_changes = True
-        print("add_manual_event called")
         onset = self.onset_spinbox.value()
         offset = self.offset_spinbox.value()
         event_type = self.event_type_combo.currentText()
@@ -929,34 +939,24 @@ class MotionAnnotator(QWidget):
                 f"An event must have a duration of at least 1 frame.\n"
                 f"Please set the offset to a frame number higher than {onset}.")
             return
-        # Vérifie si cet onset existe déjà pour éviter les doublons
         if onset in self.onsets:
             QMessageBox.warning(self, "Warning", f"Event at frame {onset} already exists")
             return
         # Check for overlap with existing events (ignore rejected)
         overlapping = []
-        for existing_onset in self.onsets:
-            existing_status = self.timeline_canvas.onset_validations.get(existing_onset, 'pending')
-            if existing_status == 'rejected':
+        for other_onset in self.onsets:
+            if self.timeline_canvas.onset_validations.get(other_onset, 'pending') == 'rejected':
                 continue
-            existing_offset = self.timeline_canvas.event_offsets.get(existing_onset, existing_onset)
-            # Overlap if intervals [onset, offset) and [existing_onset, existing_offset) intersect
-            if not (offset <= existing_onset or onset >= existing_offset):
-                overlapping.append((self.onset_types.get(existing_onset, '?'), existing_onset, existing_offset))
-            # Also treat exact onset match as overlap
-            elif onset == existing_onset:
-                overlapping.append((self.onset_types.get(existing_onset, '?'), existing_onset, existing_offset))
-        go_to_overlap = False
-        overlap_onset = None
+            other_offset = self.timeline_canvas.event_offsets.get(other_onset, other_onset)
+            if (onset <= other_offset and offset >= other_onset) and not (onset < other_onset and offset > other_offset):
+                overlapping.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
         if overlapping:
-            overlap_str = "\n".join([f"- {typ} from {ons} to {off}" for typ, ons, off in overlapping])
-            msg = f"Are you sure you want to add this event? It overlaps with the following event(s):\n{overlap_str}"
-            reply = QMessageBox.question(self, "Overlap detected", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply != QMessageBox.Yes:
-                return
-            # Aller à l'onset du premier événement chevauchant après ajout
-            go_to_overlap = True
-            overlap_onset = overlapping[0][1]
+            msg = "Warning: This event partially overlaps with existing events:\n"
+            for o, off, typ in overlapping:
+                msg += f"- {typ} ({o}-{off})\n"
+            QMessageBox.warning(self, "Partial Overlap", msg)
+        # Check for total overlap and prompt BEFORE adding, exclude itself
+        self.check_total_overlap_and_prompt(onset, offset, exclude_onsets=onset)
         # Ajoute aux structures principales (une seule fois)
         self.onsets.append(onset)
         self.onset_types[onset] = event_type
@@ -975,38 +975,24 @@ class MotionAnnotator(QWidget):
         self.update_onset_filter()
         self.update_onset_info()
         self.redraw()
-        # Go to the new event, ou à l'overlap si besoin
-        if go_to_overlap and overlap_onset is not None:
-            # Find the correct index in the current filtered list
-            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-                if overlap_onset in self.filtered_onsets:
-                    idx = self.filtered_onsets.index(overlap_onset)
-                    self.goto_onset(idx)
-                else:
-                    # If the overlapping event is not in the current filter, show a message
-                    QMessageBox.information(self, "Overlap Info", f"The overlapping event (frame {overlap_onset}) is not visible in the current filter.\n\nYou can change the filter to see it.")
+        # Go to the next onset in the filtered list after adding
+        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            if onset in self.filtered_onsets:
+                idx = self.filtered_onsets.index(onset)
+                next_idx = min(idx + 1, len(self.filtered_onsets) - 1)
+                self.goto_onset(next_idx)
             else:
-                # If no filtered list, use the full list
-                idx = self.onsets.index(overlap_onset)
-                self.goto_onset(idx)
-            # Don't open edit mode, just navigate to the overlapping event
-        else:
-            # Go to the next onset in the filtered list after adding
-            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-                if onset in self.filtered_onsets:
-                    idx = self.filtered_onsets.index(onset)
-                    next_idx = min(idx + 1, len(self.filtered_onsets) - 1)
-                    self.goto_onset(next_idx)
-                else:
-                    # fallback: go to the new event in the full list
-                    new_idx = self.onsets.index(onset)
-                    self.goto_onset(new_idx)
-            else:
+                # fallback: go to the new event in the full list
                 new_idx = self.onsets.index(onset)
                 self.goto_onset(new_idx)
+        else:
+            new_idx = self.onsets.index(onset)
+            self.goto_onset(new_idx)
         QMessageBox.information(self, "Success", f"Added {event_type} event from frame {onset} to {offset}")
         # After successful add, reset dropdown to placeholder
         self.event_type_combo.setCurrentIndex(0)
+        self.maybe_start_auto_save()
+        self.maybe_stop_auto_save()
         
     def delete_current_onset(self):
         """Delete the currently selected onset"""
@@ -1161,6 +1147,7 @@ class MotionAnnotator(QWidget):
                 break
         self.current_onset_idx = idx
         self.update_onset_info()
+        self.check_all_validated_and_show_firework()
         
     def goto_onset(self, idx):
         # Use filtered_onsets for navigation
@@ -1236,7 +1223,7 @@ class MotionAnnotator(QWidget):
         self.unsaved_changes = True
         if not self.onsets:
             return
-        # Toujours utiliser l'onset courant de la vue filtrée si disponible
+        # Always use the current filtered onset if available
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             current_onset = self.filtered_onsets[self.current_onset_idx]
         else:
@@ -1244,6 +1231,11 @@ class MotionAnnotator(QWidget):
         prev_status = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
         if prev_status == validation:
             return
+        # If accepting, check for total overlap and prompt BEFORE accepting, exclude itself
+        if validation == 'accepted':
+            onset = current_onset
+            offset = self.timeline_canvas.event_offsets.get(onset, onset)
+            self.check_total_overlap_and_prompt(onset, offset, exclude_onsets=onset)
         self.undo_stack.append((current_onset, prev_status))
         self.timeline_canvas.set_onset_validation(current_onset, validation)
         if validation == 'accepted':
@@ -1253,19 +1245,23 @@ class MotionAnnotator(QWidget):
                 self.awaiting_offset_validation = True
                 self.current_offset_for_validation = offset
                 self.goto_offset_for_validation(offset)
-                self.update_onset_filter()  # MAJ immédiate
+                self.update_onset_filter()  # Immediate update
                 self.setFocus()
                 return
         elif validation == 'edited':
             self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
         elif validation == 'rejected':
             self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
+            # Go to next onset after rejection
+            if self.current_onset_idx < len(self.onsets) - 1:
+                self.next_onset()
         self.update_performance_display()
-        self.update_onset_filter()  # MAJ immédiate
-        # Si la liste filtrée est vide après rejet, ne pas avancer
+        self.check_halfway_and_show_mouse()
+        self.check_all_validated_and_show_firework()
+        self.update_onset_filter()
+        # If the filtered list is empty after rejection, do not advance
         if hasattr(self, 'filtered_onsets') and not self.filtered_onsets:
             self.onset_info_label.setText("0/0\nNo onsets loaded")
-            # Optionnel : désactiver navigation
             self.prev_onset_btn.setEnabled(False)
             self.next_onset_btn.setEnabled(False)
             self.accept_btn.setEnabled(False)
@@ -1313,6 +1309,12 @@ class MotionAnnotator(QWidget):
             return
         new_onset = self.edit_onset_spinbox.value()
         new_offset = self.edit_offset_spinbox.value()
+        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            old_onset = self.filtered_onsets[self.current_onset_idx]
+        else:
+            old_onset = self.onsets[self.current_onset_idx]
+        # Check for total overlap and prompt BEFORE editing, exclude both old and new onset
+        self.check_total_overlap_and_prompt(new_onset, new_offset, exclude_onsets=[old_onset, new_onset])
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             old_onset = self.filtered_onsets[self.current_onset_idx]
             if old_onset in self.onsets:
@@ -1418,6 +1420,8 @@ class MotionAnnotator(QWidget):
         # Mise à jour du filtre et du compteur après édition
         self.update_onset_filter()
         self.setFocus()  # Restore focus to main window
+        # Check for total overlap and prompt
+        self.check_total_overlap_and_prompt(new_onset, new_offset, exclude_onsets=[old_onset, new_onset])
 
     def update_performance_display(self):
         # New: Score is 1 for accepted, -1 for rejected, 0.5 for edited, 0 for pending/manually added
@@ -1444,6 +1448,8 @@ Performance Score:
 (accepted=1, rejected=-1, edited=0.5, pending=0, manually added=0)
         """
         self.metrics_text.setText(display_text.strip())
+        self.check_halfway_and_show_mouse()
+        self.check_all_validated_and_show_firework()
         
     # Removed save_curated_onsets() - functionality merged into save_and_export_validation()
             
@@ -1682,7 +1688,7 @@ Performance Score:
                     onset = i
                     in_event = True
                 elif val == 0 and in_event:
-                    offset = i  # Revert: offset is the first frame after the event (exclusive)
+                    offset = i - 1  # Make offset inclusive
                     if onset not in self.onsets:
                         self.onsets.append(onset)
                         self.onset_types[onset] = event_type
@@ -1711,7 +1717,7 @@ Performance Score:
                     self.curated_events[event_type].append([onset, offset, 1])
                     in_event = False
             if in_event:
-                offset = len(arr)  # Revert: offset is the first frame after the event (exclusive)
+                offset = len(arr) - 1  # Make offset inclusive
                 if onset not in self.onsets:
                     self.onsets.append(onset)
                     self.onset_types[onset] = event_type
@@ -1916,9 +1922,14 @@ Performance Score:
     def edit_offset(self):
         # Toggle : si déjà visible, fermer simplement
         if hasattr(self, 'offset_edit_widget') and self.offset_edit_widget is not None:
+            parent_layout = self.offset_validation_widget.parentWidget().layout()
+            parent_layout.removeWidget(self.offset_edit_widget)
             self.offset_edit_widget.setParent(None)
             self.offset_edit_widget.deleteLater()
             self.offset_edit_widget = None
+            parent_layout.update()
+            self.offset_validation_widget.parentWidget().adjustSize()
+            self.updateGeometry()
             self.setFocus()  # Focus principal après fermeture
             return
         # Sinon, afficher le widget pour l'offset de l'événement courant
@@ -1963,9 +1974,14 @@ Performance Score:
             self.update_performance_display()
             self.update_onset_info()
         if self.offset_edit_widget is not None:
+            parent_layout = self.offset_validation_widget.parentWidget().layout()
             self.offset_edit_widget.setParent(None)
             self.offset_edit_widget.deleteLater()
             self.offset_edit_widget = None
+            parent_layout.update()
+            self.offset_validation_widget.parentWidget().adjustSize()
+            self.updateGeometry()
+            self.adjustSize()
         self.update_onset_info()
         self.timeline_canvas.update_timeline()
         # Fermer le menu offset si ouvert
@@ -2267,7 +2283,19 @@ Performance Score:
             mf_df.at[onset, 'status'] = status_label
             mf_df.at[onset, 'score'] = score
         mf_path = os.path.join(output_dir, f"validation_MF{suffix}.xlsx")
-        mf_df.to_excel(mf_path, index=False)
+        try:
+            mf_df.to_excel(mf_path, index=False)
+        except PermissionError:
+            # Try saving in a new folder
+            alt_dir = os.path.join(os.path.dirname(output_dir), "mousecraft_output_2")
+            os.makedirs(alt_dir, exist_ok=True)
+            alt_path = os.path.join(alt_dir, os.path.basename(mf_path))
+            mf_df.to_excel(alt_path, index=False)
+            QMessageBox.warning(
+                self, "Export Warning",
+                "Careful: I could not overwrite the file because it is open in Excel (or another program).\n"
+                f"The output was saved in {alt_dir} instead."
+            )
         # Sauvegarde aussi en numpy uniquement
         import numpy as np
         mf_npy_path = os.path.splitext(mf_path)[0] + ".npy"
@@ -2410,24 +2438,43 @@ Performance Score:
         return overlaps
 
     def show_firework_animation(self):
-        """Show a firework GIF animation for 2.5 seconds when all pending events are resolved."""
+        """Show a firework GIF animation for 5 seconds with a congratulatory message below, with a solid dialog background."""
+        from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout
+        from PyQt5.QtCore import Qt, QTimer
+        from PyQt5.QtGui import QMovie
         dialog = QDialog(self)
         dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
-        dialog.setAttribute(Qt.WA_TranslucentBackground)
+        # Do NOT set Qt.WA_TranslucentBackground
         dialog.setModal(True)
-        label = QLabel(dialog)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # Firework GIF
+        firework_label = QLabel(dialog)
+        firework_label.setAlignment(Qt.AlignCenter)
         movie = QMovie("Fireworks.gif")
-        label.setMovie(movie)
-        label.setAlignment(Qt.AlignCenter)
-        dialog.resize(400, 400)
-        label.resize(400, 400)
+        firework_label.setMovie(movie)
+        firework_label.setFixedSize(400, 400)
         movie.start()
+        layout.addWidget(firework_label, alignment=Qt.AlignCenter)
+        # Message below
+        message_label = QLabel("Congratulations! All events have been validated.", dialog)
+        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #333; background: white;")
+        layout.addWidget(message_label, alignment=Qt.AlignCenter)
+        dialog.setLayout(layout)
+        dialog.resize(420, 470)
         dialog.show()
-        QTimer.singleShot(2500, dialog.accept)
+        QTimer.singleShot(5000, dialog.accept)
 
     def set_event_status(self, onset, status):
-        # ... existing code for setting status ...
+        prev_status = self.timeline_canvas.onset_validations.get(onset, 'pending')
         self.timeline_canvas.onset_validations[onset] = status
+        # Start autosave if status changed from pending to something else
+        if prev_status == 'pending' and status != 'pending':
+            self.maybe_start_auto_save()
+        # Stop autosave if there are no more pending events
+        self.maybe_stop_auto_save()
         # ... any other logic ...
         # Check if there are no more pending events
         if not any(self.timeline_canvas.onset_validations.get(o, 'pending') == 'pending' for o in self.onsets):
@@ -2435,46 +2482,111 @@ Performance Score:
         # ... rest of the function ...
 
     def show_mouse_animation(self):
-        """Show a mouse image moving from left to right for 2.5 seconds when half or more events are no longer pending."""
+        """Mouse moves from far left to center, stops, says something with a bubble for 3s, then continues to far right."""
         from PyQt5.QtWidgets import QDialog, QLabel
-        from PyQt5.QtCore import Qt, QTimer
+        from PyQt5.QtCore import Qt, QTimer, QSize
         from PyQt5.QtGui import QMovie, QPixmap
         import os
-        duration_ms = 2500
-        steps = 50
-        interval = duration_ms // steps
-        dialog_width = 500
-        dialog_height = 200
-        mouse_width = 100
-        mouse_height = 100
+        import random
+        dialog_width = 1000
+        dialog_height = 300
+        mouse_path = "mouse.webp"
+        bubble_path = "bulle_parole.webp"
+        # Load mouse image to get its size
+        if os.path.exists(mouse_path):
+            from PIL import Image
+            im = Image.open(mouse_path)
+            mouse_width, mouse_height = im.size
+        else:
+            mouse_width, mouse_height = 239, 234  # fallback
+        max_mouse_height = int(dialog_height * 0.8)
+        scale_factor = min(1.0, max_mouse_height / mouse_height)
+        scaled_mouse_width = int(mouse_width * scale_factor)
+        scaled_mouse_height = int(mouse_height * scale_factor)
+        # Load bubble image to get its size
+        if os.path.exists(bubble_path):
+            from PIL import Image
+            im_bubble = Image.open(bubble_path)
+            bubble_width, bubble_height = im_bubble.size
+        else:
+            bubble_width, bubble_height = 180, 100  # fallback
+        max_bubble_width = int(scaled_mouse_width * 1.5)
+        scale_bubble = min(1.0, max_bubble_width / bubble_width)
+        scaled_bubble_width = int(bubble_width * scale_bubble)
+        scaled_bubble_height = int(bubble_height * scale_bubble)
+        messages = [
+            "Congrats, you're doing a good job!",
+            "A bit more, you can do it!",
+            "Ahah, more and more twitch!"
+        ]
+        chosen_message = random.choice(messages)
         dialog = QDialog(self)
         dialog.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
-        dialog.setAttribute(Qt.WA_TranslucentBackground)
         dialog.setModal(True)
         dialog.resize(dialog_width, dialog_height)
-        label = QLabel(dialog)
-        label.resize(mouse_width, mouse_height)
-        label.setAttribute(Qt.WA_TranslucentBackground)
-        # Support animated or static image
-        if os.path.splitext("mouse.webp")[1].lower() in [".gif", ".webp"]:
-            movie = QMovie("mouse.webp")
-            label.setMovie(movie)
+        # Mouse label
+        mouse_label = QLabel(dialog)
+        mouse_label.resize(scaled_mouse_width, scaled_mouse_height)
+        mouse_label.setAttribute(Qt.WA_TranslucentBackground)
+        if os.path.splitext(mouse_path)[1].lower() in [".gif", ".webp"]:
+            movie = QMovie(mouse_path)
+            movie.setScaledSize(QSize(scaled_mouse_width, scaled_mouse_height))
+            mouse_label.setMovie(movie)
             movie.start()
         else:
-            pixmap = QPixmap("mouse.webp")
-            label.setPixmap(pixmap.scaled(mouse_width, mouse_height, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        # Start at left
-        label.move(0, (dialog_height - mouse_height) // 2)
-        dialog.show()
-        # Animate
-        def animate(step=0):
-            if step > steps:
+            pixmap = QPixmap(mouse_path)
+            mouse_label.setPixmap(pixmap.scaled(scaled_mouse_width, scaled_mouse_height, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # Bubble label
+        bubble_label = QLabel(dialog)
+        bubble_label.resize(scaled_bubble_width, scaled_bubble_height)
+        bubble_label.setAttribute(Qt.WA_TranslucentBackground)
+        if os.path.exists(bubble_path):
+            bubble_pixmap = QPixmap(bubble_path)
+            bubble_label.setPixmap(bubble_pixmap.scaled(scaled_bubble_width, scaled_bubble_height, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # Message label (child of bubble_label)
+        message_label = QLabel(bubble_label)
+        message_label.setText(f"<div style='text-align:center; font-size:14px; font-weight:bold; color:#222;'>{chosen_message}</div>")
+        message_label.setWordWrap(True)
+        message_label.setAlignment(Qt.AlignCenter)
+        message_label.setFixedWidth(scaled_bubble_width - 20)
+        message_label.setFixedHeight(scaled_bubble_height - 20)
+        message_label.move(10, 10)
+        message_label.setStyleSheet("background: transparent;")
+        # Start/end positions
+        start_x = -scaled_mouse_width
+        center_x = (dialog_width - scaled_mouse_width) // 2
+        end_x = dialog_width
+        y_mouse = (dialog_height - scaled_mouse_height) // 2
+        y_bubble = y_mouse - scaled_bubble_height - 10
+        # Animation timing
+        move1_steps = 60
+        move2_steps = 60
+        interval = 30  # ms per step
+        pause_duration = 3000  # 3 seconds
+        # Hide bubble initially
+        bubble_label.hide()
+        def move_to_center(step=0):
+            if step > move1_steps:
+                # Show bubble and message, pause
+                bubble_label.show()
+                bubble_x = center_x + scaled_mouse_width // 2
+                bubble_label.move(bubble_x, y_bubble)
+                QTimer.singleShot(pause_duration, lambda: after_pause())
+                return
+            x = int(start_x + (center_x - start_x) * step / move1_steps)
+            mouse_label.move(x, y_mouse)
+            QTimer.singleShot(interval, lambda: move_to_center(step + 1))
+        def after_pause():
+            bubble_label.hide()
+            move_to_right()
+        def move_to_right(step=0):
+            if step > move2_steps:
                 dialog.accept()
                 return
-            x = int((dialog_width - mouse_width) * step / steps)
-            label.move(x, (dialog_height - mouse_height) // 2)
-            QTimer.singleShot(interval, lambda: animate(step + 1))
-        animate()
+            x = int(center_x + (end_x - center_x) * step / move2_steps)
+            mouse_label.move(x, y_mouse)
+            QTimer.singleShot(interval, lambda: move_to_right(step + 1))
+        move_to_center()
 
     def frame_spinbox_changed(self, value):
         # Jump to the frame entered by the user
@@ -2489,19 +2601,12 @@ Performance Score:
         """Create and save a pie chart showing the percentage of accepted, edited (<X, >X), pending, rejected, and manually added events."""
         import matplotlib.pyplot as plt
         from collections import Counter
-        # Count statuses with edit threshold
         edit_threshold = getattr(self, 'edit_threshold', 5)
         status_buckets = []
         for event in export_events:
             status = event[3]
-            score = event[4]
             if status == 'edited':
-                # Determine shift (score==1 means < threshold, 0.5 means > threshold)
-                # If you have the actual shift, use it; otherwise, use score as proxy
-                if score == 1:
-                    status_buckets.append(f'edited <{edit_threshold}')
-                else:
-                    status_buckets.append(f'edited >{edit_threshold}')
+                status_buckets.append('edited')
             else:
                 status_buckets.append(status)
         counter = Counter(status_buckets)
@@ -2510,13 +2615,12 @@ Performance Score:
         colors = []
         color_map = {
             'accepted': '#4CAF50',      # Green
-            f'edited <{edit_threshold}': '#FFD54F',  # Light yellow
-            f'edited >{edit_threshold}': '#FFA726',  # Orange
+            'edited': '#FFA726',        # Orange
             'pending': '#90A4AE',       # Gray-blue
             'rejected': '#F44336',      # Red
-            'manually added': '#00CED1' # Turquoise
+            'manually added': '#00CED1' # Cyan
         }
-        for status in ['accepted', f'edited <{edit_threshold}', f'edited >{edit_threshold}', 'pending', 'rejected', 'manually added']:
+        for status in ['accepted', 'edited', 'pending', 'rejected', 'manually added']:
             if counter[status] > 0:
                 labels.append(f"{status.capitalize()} ({counter[status]})")
                 sizes.append(counter[status])
@@ -2530,6 +2634,151 @@ Performance Score:
         if save_path:
             plt.savefig(save_path, dpi=200, bbox_inches='tight')
         plt.close()
+
+    def setup_auto_save(self, interval_minutes=20):
+        """Set up the autosave timer but do not start it yet."""
+        self.auto_save_timer = QTimer(self)
+        self.auto_save_timer.timeout.connect(self.auto_save)
+        self._auto_save_started = False  # Track if timer has started
+        self._auto_save_interval = interval_minutes * 60 * 1000
+
+    def maybe_start_auto_save(self):
+        """Start autosave timer if at least one event is not pending and timer not already started."""
+        if not hasattr(self, 'auto_save_timer'):
+            self.setup_auto_save()
+        if not getattr(self, '_auto_save_started', False):
+            if hasattr(self, 'onsets') and self.onsets:
+                non_pending = any(
+                    self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending'
+                    for o in self.onsets
+                )
+                if non_pending:
+                    self.auto_save_timer.start(self._auto_save_interval)
+                    self._auto_save_started = True
+
+    def auto_save(self):
+        # Only autosave if at least one event is not pending
+        if hasattr(self, 'onsets') and self.onsets:
+            non_pending = any(
+                self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending'
+                for o in self.onsets
+            )
+            if not non_pending:
+                return  # Do not autosave if all are pending
+        dir_path = self.export_path_lineedit.text()
+        if not dir_path:
+            QMessageBox.information(
+                self, "Auto-Save",
+                "Please choose an export directory for auto-save to work."
+            )
+            self.choose_export_path()
+            dir_path = self.export_path_lineedit.text()
+            if not dir_path:
+                return  # User cancelled
+        self.export_all_outputs()
+        print("Auto-saved project at", dir_path)
+
+    def check_halfway_and_show_mouse(self):
+        total = len(self.onsets)
+        non_pending = sum(
+            1 for o in self.onsets
+            if self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending'
+        )
+        if not hasattr(self, '_mouse_shown') or not self._mouse_shown:
+            if total > 0 and non_pending >= total / 2:
+                self.show_mouse_animation()
+                self._mouse_shown = True
+
+    def check_all_validated_and_show_firework(self):
+        if not hasattr(self, '_firework_shown') or not self._firework_shown:
+            if all(self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending' for o in self.onsets):
+                self.show_firework_animation()
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.information(self, "Congratulations!", "Congratulations! All events have been validated.")
+                self._firework_shown = True
+
+    def maybe_stop_auto_save(self):
+        """Stop autosave timer if there are no more pending events."""
+        if hasattr(self, 'auto_save_timer') and getattr(self, '_auto_save_started', False):
+            if hasattr(self, 'onsets') and self.onsets:
+                all_non_pending = all(
+                    self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending'
+                    for o in self.onsets
+                )
+                if all_non_pending:
+                    self.auto_save_timer.stop()
+                    self._auto_save_started = False
+
+    def check_total_overlap_and_prompt(self, new_onset, new_offset, exclude_onsets=None):
+        """Check for totally overlapped events and prompt to reject them. Exclude the event(s) being edited/added if needed."""
+        if exclude_onsets is None:
+            exclude_onsets = []
+        elif not isinstance(exclude_onsets, (list, tuple, set)):
+            exclude_onsets = [exclude_onsets]
+        overlapped = []
+        for other_onset in self.onsets:
+            if other_onset in exclude_onsets:
+                continue
+            other_offset = self.timeline_canvas.event_offsets.get(other_onset, other_onset)
+            # Check if other event is totally inside new event
+            if new_onset < other_onset and new_offset > other_offset:
+                overlapped.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
+        for onset, offset, event_type in overlapped:
+            reply = QMessageBox.question(
+                self,
+                "Total Overlap Detected",
+                f"The event {event_type} ({onset}-{offset}) is totally overlapped by your new/edited event.\nDo you want to reject it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                self.timeline_canvas.onset_validations[onset] = 'rejected'
+                self.update_onset_filter()
+                self.update_onset_info()
+                self.redraw()
+                # Go to next non-rejected onset
+                idx = self.onsets.index(onset)
+                next_idx = idx + 1
+                while next_idx < len(self.onsets):
+                    next_onset = self.onsets[next_idx]
+                    if self.timeline_canvas.onset_validations.get(next_onset, 'pending') != 'rejected':
+                        self.goto_onset(next_idx)
+                        break
+                    next_idx += 1
+
+    def show_change_type_dropdown(self):
+        # Remove any existing dropdown
+        if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
+            self.change_type_dropdown.hide()
+            self.change_type_dropdown.deleteLater()
+        # Create dropdown
+        from PyQt5.QtWidgets import QComboBox
+        self.change_type_dropdown = QComboBox(self)
+        self.change_type_dropdown.addItems(["twitch", "active", "complex"])
+        # Set current type as selected
+        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            current_onset = self.filtered_onsets[self.current_onset_idx]
+        else:
+            current_onset = self.onsets[self.current_onset_idx]
+        current_type = self.onset_types.get(current_onset, "twitch")
+        idx = self.change_type_dropdown.findText(current_type)
+        if idx >= 0:
+            self.change_type_dropdown.setCurrentIndex(idx)
+        # Place dropdown next to the button
+        btn_pos = self.change_type_btn.mapToGlobal(self.change_type_btn.rect().bottomLeft())
+        self.change_type_dropdown.move(self.mapFromGlobal(btn_pos))
+        self.change_type_dropdown.showPopup()
+        self.change_type_dropdown.activated[str].connect(lambda new_type: self.change_event_type(new_type, current_onset))
+        self.change_type_dropdown.show()
+    def change_event_type(self, new_type, onset):
+        self.onset_types[onset] = new_type
+        self.timeline_canvas.onset_types[onset] = new_type
+        self.redraw()
+        self.update_onset_info()
+        if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
+            self.change_type_dropdown.hide()
+            self.change_type_dropdown.deleteLater()
+            self.change_type_dropdown = None
 
 
 
