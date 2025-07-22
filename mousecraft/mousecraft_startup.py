@@ -17,7 +17,7 @@ class StartupWindow(tk.Tk):
         self.configure(bg='white')
 
         # Load background image (mouse.png)
-        bg_path = 'mousecraft/mouse.png'
+        bg_path = 'mousecraft/resources/mouse.png'
         if os.path.exists(bg_path):
             img = Image.open(bg_path)
             img = img.resize((1100, 800), Image.Resampling.LANCZOS)
@@ -28,7 +28,7 @@ class StartupWindow(tk.Tk):
             self.bg_label = None
 
         # Place MouseCraft.png as logo at the top, centered
-        logo_path = 'mousecraft/MouseCraft.png'
+        logo_path = 'mousecraft/resources/MouseCraft.png'
         if os.path.exists(logo_path):
             logo_img = Image.open(logo_path)
             # Resize logo to fit nicely at the top (e.g., width 400)
