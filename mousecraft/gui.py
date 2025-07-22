@@ -234,8 +234,8 @@ class MotionAnnotator(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
         # Set window icon to mouse.webp if possible, else fallback to MouseCraft.png
-        mouse_icon_path = os.path.join(SCRIPT_DIR, "mouse.webp")
-        mousecraft_icon_path = os.path.join(SCRIPT_DIR, "MouseCraft.png")
+        mouse_icon_path = os.path.join(SCRIPT_DIR, 'resources',"mouse.png")
+        mousecraft_icon_path = os.path.join(SCRIPT_DIR, 'resources', "MouseCraft.png")
         if os.path.exists(mouse_icon_path):
             try:
                 self.setWindowIcon(QIcon(mouse_icon_path))
@@ -294,7 +294,7 @@ class MotionAnnotator(QWidget):
         # Add MouseCraft logo at the top, centered
         logo_label = QLabel()
         logo_label.setAlignment(Qt.AlignCenter)
-        logo_path = os.path.join(SCRIPT_DIR, "MouseCraft.png")
+        logo_path = os.path.join(SCRIPT_DIR, 'resources', "MouseCraft.png")
         if os.path.exists(logo_path):
             logo_pixmap = QPixmap(logo_path)
             logo_label.setPixmap(logo_pixmap.scaledToWidth(300, Qt.SmoothTransformation))
