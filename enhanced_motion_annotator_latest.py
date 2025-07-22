@@ -275,10 +275,16 @@ class MotionAnnotator(QWidget):
         # Threshold for edited events score (default: 5 frames)
         self.edit_threshold = 5
 
+        # In __init__ (add these attributes):
+        self._mouse_half_shown = False
+        self._mouse_milestones = set()
+        self._mouse_milestones_shown = set()
+
         self.init_ui()
         self.setup_timer()
         self.unsaved_changes = False  # Track unsaved changes
         self.setup_auto_save(interval_minutes=20)
+
         
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -513,6 +519,9 @@ class MotionAnnotator(QWidget):
         self.offset_validation_widget = QWidget()
         offset_val_layout = QHBoxLayout()
         self.validate_offset_btn = QPushButton("Validate Offset")
+        self.setup_offset_edit_widget()
+        onset_layout.addWidget(self.offset_edit_widget)
+        self.offset_edit_widget.hide()
         self.edit_offset_btn = QPushButton("Edit Offset")
         self.validate_offset_btn.clicked.connect(self.validate_offset)
         self.edit_offset_btn.clicked.connect(self.edit_offset)
@@ -528,6 +537,8 @@ class MotionAnnotator(QWidget):
         self.change_type_btn = QPushButton("Change Type")
         self.undo_btn = QPushButton("↩ Undo")
         self.accept_btn.clicked.connect(self.accept_and_toggle_offset)
+        self.setup_offset_edit_widget()  # crée offset_edit_widget et offset_lineedit
+        onset_layout.addWidget(self.offset_edit_widget)  # ajoute ce widget dans le layout
         self.edit_btn.clicked.connect(self.start_edit_onset)
         self.reject_btn.clicked.connect(lambda: self.validate_onset('rejected'))
         self.change_type_btn.clicked.connect(self.show_change_type_dropdown)
@@ -727,6 +738,10 @@ class MotionAnnotator(QWidget):
                         QMessageBox.warning(self, "Warning", "File format not recognized. Please provide a valid classification file.")
                 self.undo_btn.setEnabled(True)
                 self.maybe_start_auto_save()
+                # Reset mouse milestone state
+                self._mouse_half_shown = False
+                self._mouse_milestones = set()
+                self._mouse_milestones_shown = set()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load classifications: {str(e)}")
             import traceback
@@ -761,6 +776,10 @@ class MotionAnnotator(QWidget):
         if self.onsets:
             self.goto_onset(0)
         self.undo_btn.setEnabled(True)
+        # Reset mouse milestone state
+        self._mouse_half_shown = False
+        self._mouse_milestones = set()
+        self._mouse_milestones_shown = set()
         
     def load_excel_classifications(self, fname):
         """Load classifications from Excel/CSV format with SLEAP-like structure"""
@@ -809,7 +828,7 @@ class MotionAnnotator(QWidget):
             for onset in active_onsets:
                 # Find corresponding offset
                 offset = self.find_corresponding_offset(onset, active_offsets)
-                offset = offset - 1 if offset > onset else onset  # Make offset inclusive
+                offset = offset + 1 if offset > onset else onset  # Make offset inclusive (span onset to offset inclusively)
                 self.onsets.append(onset)
                 self.onset_types[onset] = 'active'
                 self.timeline_canvas.event_offsets[onset] = offset
@@ -827,7 +846,7 @@ class MotionAnnotator(QWidget):
             for onset in twitch_onsets:
                 # Find corresponding offset
                 offset = self.find_corresponding_offset(onset, twitch_offsets)
-                offset = offset - 1 if offset > onset else onset
+                offset = offset + 1 if offset > onset else onset
                 self.onsets.append(onset)
                 self.onset_types[onset] = 'twitch'
                 self.timeline_canvas.event_offsets[onset] = offset
@@ -844,7 +863,7 @@ class MotionAnnotator(QWidget):
             for onset in complex_onsets:
                 # Find corresponding offset
                 offset = self.find_corresponding_offset(onset, complex_offsets)
-                offset = offset - 1 if offset > onset else onset
+                offset = offset + 1 if offset > onset else onset
                 self.onsets.append(onset)
                 self.onset_types[onset] = 'complex'
                 self.timeline_canvas.event_offsets[onset] = offset
@@ -909,13 +928,13 @@ class MotionAnnotator(QWidget):
         self.onset_spinbox.setValue(self.current_frame)
         
     def set_current_as_offset(self):
-        """Set current frame as offset"""
+        """Set current frame as offset (exclusive)"""
         self.offset_spinbox.setValue(self.current_frame)
         
     def update_offset_range(self):
-        """Update offset range to be >= onset"""
+        """Update offset range to be > onset"""
         onset = self.onset_spinbox.value()
-        self.offset_spinbox.setMinimum(onset)
+        self.offset_spinbox.setMinimum(onset + 1)
         # Only set default offset if it's invalid (<= onset)
         current_offset = self.offset_spinbox.value()
         if current_offset <= onset:
@@ -928,27 +947,30 @@ class MotionAnnotator(QWidget):
     def add_manual_event(self):
         self.unsaved_changes = True
         onset = self.onset_spinbox.value()
-        offset = self.offset_spinbox.value()
+        offset_exclusive = self.offset_spinbox.value()
         event_type = self.event_type_combo.currentText()
         if event_type == "Select type…":
             QMessageBox.warning(self, "Invalid Event Type", "Please select an event type (twitch, active, or complex) before adding the event.")
             return
-        if onset >= offset:
+        if onset >= offset_exclusive:
             QMessageBox.warning(self, "Invalid Event", 
-                f"Offset frame ({offset}) must be greater than onset frame ({onset}).\n\n"
+                f"Offset frame ({offset_exclusive}) must be greater than onset frame ({onset}).\n\n"
                 f"An event must have a duration of at least 1 frame.\n"
                 f"Please set the offset to a frame number higher than {onset}.")
             return
         if onset in self.onsets:
             QMessageBox.warning(self, "Warning", f"Event at frame {onset} already exists")
             return
+
+        offset_inclusive = offset_exclusive - 1
+
         # Check for overlap with existing events (ignore rejected)
         overlapping = []
         for other_onset in self.onsets:
             if self.timeline_canvas.onset_validations.get(other_onset, 'pending') == 'rejected':
                 continue
             other_offset = self.timeline_canvas.event_offsets.get(other_onset, other_onset)
-            if (onset <= other_offset and offset >= other_onset) and not (onset < other_onset and offset > other_offset):
+            if (onset <= other_offset and offset_inclusive >= other_onset) and not (onset < other_onset and offset_inclusive > other_offset):
                 overlapping.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
         if overlapping:
             msg = "Warning: This event partially overlaps with existing events:\n"
@@ -956,39 +978,50 @@ class MotionAnnotator(QWidget):
                 msg += f"- {typ} ({o}-{off})\n"
             QMessageBox.warning(self, "Partial Overlap", msg)
         # Check for total overlap and prompt BEFORE adding, exclude itself
-        self.check_total_overlap_and_prompt(onset, offset, exclude_onsets=onset)
+        self.check_total_overlap_and_prompt(onset, offset_inclusive, exclude_onsets=onset)
         # Ajoute aux structures principales (une seule fois)
         self.onsets.append(onset)
         self.onset_types[onset] = event_type
-        self.timeline_canvas.event_offsets[onset] = offset
+        self.timeline_canvas.event_offsets[onset] = offset_inclusive
         # Set validation status to manually added
         self.timeline_canvas.onset_validations[onset] = 'manually added'
         # Update curated events
         if event_type not in self.curated_events:
             self.curated_events[event_type] = []
-        self.curated_events[event_type].append([onset, offset, 0])  # 0 = manually added
+        self.curated_events[event_type].append([onset, offset_inclusive, 0])  # 0 = manually added
         # Sort onsets to maintain chronological order
         self.onsets = sorted(self.onsets)
         # Store in undo stack
-        self.undo_stack.append(('add_manual', onset, event_type, offset))
+        self.undo_stack.append(('add_manual', onset, event_type, offset_inclusive))
         # Redraw timeline and refresh filtered onsets/counter immediately
         self.update_onset_filter()
         self.update_onset_info()
         self.redraw()
-        # Go to the next onset in the filtered list after adding
-        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-            if onset in self.filtered_onsets:
-                idx = self.filtered_onsets.index(onset)
-                next_idx = min(idx + 1, len(self.filtered_onsets) - 1)
-                self.goto_onset(next_idx)
+        # Navigation logic after adding:
+        if overlapping:
+            # Go to the first overlapped onset
+            overlapped_onset = overlapping[0][0]
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets and overlapped_onset in self.filtered_onsets:
+                idx = self.filtered_onsets.index(overlapped_onset)
+                self.goto_onset(idx)
+            elif overlapped_onset in self.onsets:
+                idx = self.onsets.index(overlapped_onset)
+                self.goto_onset(idx)
+        else:
+            # Go to the next event in the filtered list after adding
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+                if onset in self.filtered_onsets:
+                    idx = self.filtered_onsets.index(onset)
+                    next_idx = idx + 1 if idx < len(self.filtered_onsets) - 1 else 0
+                    self.goto_onset(next_idx)
+                else:
+                    # fallback: go to the new event in the full list
+                    new_idx = self.onsets.index(onset)
+                    self.goto_onset(new_idx)
             else:
-                # fallback: go to the new event in the full list
                 new_idx = self.onsets.index(onset)
                 self.goto_onset(new_idx)
-        else:
-            new_idx = self.onsets.index(onset)
-            self.goto_onset(new_idx)
-        QMessageBox.information(self, "Success", f"Added {event_type} event from frame {onset} to {offset}")
+        QMessageBox.information(self, "Success", f"Added {event_type} event from frame {onset} to {offset_exclusive}")
         # After successful add, reset dropdown to placeholder
         self.event_type_combo.setCurrentIndex(0)
         self.maybe_start_auto_save()
@@ -1174,6 +1207,16 @@ class MotionAnnotator(QWidget):
         else:
             idx = self.current_onset_idx - 1
         self.goto_onset(idx)
+        
+    def setup_offset_edit_widget(self):
+        self.offset_edit_widget = QWidget()
+        layout = QHBoxLayout()
+        self.edit_offset_spinbox = QSpinBox()
+        self.edit_offset_spinbox.setRange(0, 999999)
+        layout.addWidget(QLabel("Offset:"))
+        layout.addWidget(self.edit_offset_spinbox)
+        self.offset_edit_widget.setLayout(layout)
+        self.offset_edit_widget.hide()
 
     def next_onset(self):
         if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
@@ -1211,9 +1254,11 @@ class MotionAnnotator(QWidget):
             onset_type = ''
         validation = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
         offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
+        # For display: show offset+1 if offset > onset
+        display_offset = offset + 1 if offset > current_onset else offset
         info_text = f"Onset {self.current_onset_idx + 1}/{len(self.filtered_onsets)}: Frame {current_onset}"
         if offset != current_onset:
-            info_text += f" to {offset}"
+            info_text += f" to {display_offset}"
         if onset_type:
             info_text += f" | Type: {onset_type}"
         info_text += f" | Status: {validation}"
@@ -1252,11 +1297,9 @@ class MotionAnnotator(QWidget):
             self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
         elif validation == 'rejected':
             self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
-            # Go to next onset after rejection
-            if self.current_onset_idx < len(self.onsets) - 1:
-                self.next_onset()
+            # No navigation here; let the final next_onset() at the end handle it
         self.update_performance_display()
-        self.check_halfway_and_show_mouse()
+        self.check_mouse_milestones()
         self.check_all_validated_and_show_firework()
         self.update_onset_filter()
         # If the filtered list is empty after rejection, do not advance
@@ -1292,7 +1335,7 @@ class MotionAnnotator(QWidget):
             current_onset = self.onsets[self.current_onset_idx]
         offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
         self.edit_onset_spinbox.setValue(current_onset)
-        self.edit_offset_spinbox.setValue(offset)
+        self.edit_offset_spinbox.setValue(offset + 1)  # Show exclusive offset
         self.edit_widget.show()
         self.accept_btn.setEnabled(False)
         self.edit_btn.setEnabled(True)
@@ -1308,7 +1351,8 @@ class MotionAnnotator(QWidget):
         if not self.onsets:
             return
         new_onset = self.edit_onset_spinbox.value()
-        new_offset = self.edit_offset_spinbox.value()
+        new_offset_exclusive = self.edit_offset_spinbox.value()
+        new_offset = new_offset_exclusive - 1 # Convert to inclusive for internal storage
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             old_onset = self.filtered_onsets[self.current_onset_idx]
         else:
@@ -1362,7 +1406,7 @@ class MotionAnnotator(QWidget):
             # Sinon, continuer l'édition normale (statut 'edited')
         del self.onset_types[old_onset]
         self.onset_types[new_onset] = event_type
-        self.timeline_canvas.event_offsets[new_onset] = new_offset
+        self.timeline_canvas.event_offsets[new_onset] = new_offset  # Save as inclusive last frame
         if old_onset in self.timeline_canvas.event_offsets:
             del self.timeline_canvas.event_offsets[old_onset]
         for events in self.curated_events.values():
@@ -1448,7 +1492,7 @@ Performance Score:
 (accepted=1, rejected=-1, edited=0.5, pending=0, manually added=0)
         """
         self.metrics_text.setText(display_text.strip())
-        self.check_halfway_and_show_mouse()
+        self.check_mouse_milestones()
         self.check_all_validated_and_show_firework()
         
     # Removed save_curated_onsets() - functionality merged into save_and_export_validation()
@@ -1469,6 +1513,8 @@ Performance Score:
             for event in events:
                 onset = event[0]
                 offset = event[1] if len(event) > 1 else onset
+                # For export: make offset inclusive
+                export_offset = offset + 1 if offset > onset else offset
                 status = self.timeline_canvas.onset_validations.get(onset, 'pending')
                 if status == 'accepted':
                     score = 1
@@ -1480,7 +1526,7 @@ Performance Score:
                     score = 0
                 else:
                     score = 0
-                export_events.append([onset, offset, event_type, status, score])
+                export_events.append([onset, export_offset, event_type, status, score])
 
         # Save to XLSX file only
         fname, _ = QFileDialog.getSaveFileName(self, 'Save and Export Validation', '', 'Excel (*.xlsx)')
@@ -1751,6 +1797,10 @@ Performance Score:
         if self.onsets:
             self.goto_onset(0)
         self.undo_btn.setEnabled(True)
+        # Reset mouse milestone state
+        self._mouse_half_shown = False
+        self._mouse_milestones = set()
+        self._mouse_milestones_shown = set()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1848,15 +1898,16 @@ Performance Score:
     def update_onset_status(self):
         """Update the onset status bar with current frame info"""
         onset_type = self.onset_types.get(self.current_frame, None)
-        # Cherche si la frame courante est un offset
+        # Check if the current frame is an offset (exclusive)
         is_offset = False
         for onset, offset in self.timeline_canvas.event_offsets.items():
-            if offset == self.current_frame:
+            if offset + 1 == self.current_frame:
                 is_offset = True
                 break
         
-        # Check if we're in edit mode
-        is_editing = hasattr(self, 'edit_widget') and self.edit_widget.isVisible()
+        # Check if we're in either of the two edit modes
+        is_editing = (hasattr(self, 'edit_widget') and self.edit_widget.isVisible()) or \
+                     (hasattr(self, 'offset_edit_widget') and self.offset_edit_widget.isVisible())
         
         if onset_type:
             self.onset_status_label.setText(f"Frame {self.current_frame}: {onset_type.upper()} ONSET")
@@ -1866,7 +1917,7 @@ Performance Score:
             elif onset_type == 'active':
                 self.onset_status_label.setStyleSheet("background-color: yellow; color: black; padding: 5px; border: 1px solid gray; font-weight: bold;")
         elif is_offset:
-            # Affiche l'offset en rouge
+            # Display the offset in red
             if is_editing:
                 self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET (EDITING)</span>")
             else:
@@ -1920,78 +1971,48 @@ Performance Score:
         self.setFocus()
 
     def edit_offset(self):
-        # Toggle : si déjà visible, fermer simplement
-        if hasattr(self, 'offset_edit_widget') and self.offset_edit_widget is not None:
-            parent_layout = self.offset_validation_widget.parentWidget().layout()
-            parent_layout.removeWidget(self.offset_edit_widget)
-            self.offset_edit_widget.setParent(None)
-            self.offset_edit_widget.deleteLater()
-            self.offset_edit_widget = None
-            parent_layout.update()
-            self.offset_validation_widget.parentWidget().adjustSize()
-            self.updateGeometry()
-            self.setFocus()  # Focus principal après fermeture
-            return
-        # Sinon, afficher le widget pour l'offset de l'événement courant
-        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-            current_onset = self.filtered_onsets[self.current_onset_idx]
+        if self.offset_edit_widget.isVisible():
+           self.offset_edit_widget.hide()
         else:
-            current_onset = self.onsets[self.current_onset_idx]
-        current_offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
-        self.offset_edit_widget = QWidget()
-        offset_edit_layout = QHBoxLayout()
-        offset_edit_label = QLabel("Edit Offset:")
-        self.offset_edit_spinbox = QSpinBox()
-        self.offset_edit_spinbox.setRange(0, 999999)
-        self.offset_edit_spinbox.setValue(current_offset)
-        offset_edit_confirm_btn = QPushButton("Confirm Offset")
-        offset_edit_confirm_btn.clicked.connect(self.confirm_edit_offset)
-        offset_edit_layout.addWidget(offset_edit_label)
-        offset_edit_layout.addWidget(self.offset_edit_spinbox)
-        offset_edit_layout.addWidget(offset_edit_confirm_btn)
-        self.offset_edit_widget.setLayout(offset_edit_layout)
-        parent_layout = self.offset_validation_widget.parentWidget().layout()
-        parent_layout.addWidget(self.offset_edit_widget)
-        self.offset_edit_spinbox.setFocus()  # Focus direct sur le spinbox d'édition
+        # Récupère l'offset actuel pour afficher dans spinbox
+            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+               current_onset = self.filtered_onsets[self.current_onset_idx]
+            else:
+               current_onset = self.onsets[self.current_onset_idx]
+            current_offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
+            self.edit_offset_spinbox.setValue(current_offset + 1)
+
+            self.offset_edit_widget.show()
+            self.edit_offset_spinbox.setFocus()
+
+            self.offset_edit_widget.show()
+            self.edit_offset_spinbox.setFocus()
 
     def confirm_edit_offset(self):
-        # Met à jour l'offset de la motion actuellement affichée et passe le statut à 'accepted' si besoin
-        new_offset = self.offset_edit_spinbox.value()
+        # Confirm the new offset and hide the widget
+        new_offset_exclusive = self.offset_spinbox.value()
+        new_offset = new_offset_exclusive - 1 # Convert to inclusive
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             current_onset = self.filtered_onsets[self.current_onset_idx]
         else:
             current_onset = self.onsets[self.current_onset_idx]
+        if current_onset >= new_offset:
+            QMessageBox.warning(self, "Invalid Offset", "Offset must be greater than onset.")
+            return
         self.timeline_canvas.event_offsets[current_onset] = new_offset
         for event_type, events in self.curated_events.items():
             for event in events:
                 if event[0] == current_onset:
                     event[1] = new_offset
-        # Passe le statut à 'accepted' si ce n'est pas déjà le cas, et empile l'état précédent
         status = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
         if status != 'accepted':
             self.undo_stack.append((current_onset, status))
             self.timeline_canvas.set_onset_validation(current_onset, 'accepted')
-            self.update_performance_display()
-            self.update_onset_info()
-        if self.offset_edit_widget is not None:
-            parent_layout = self.offset_validation_widget.parentWidget().layout()
-            self.offset_edit_widget.setParent(None)
-            self.offset_edit_widget.deleteLater()
-            self.offset_edit_widget = None
-            parent_layout.update()
-            self.offset_validation_widget.parentWidget().adjustSize()
-            self.updateGeometry()
-            self.adjustSize()
-        self.update_onset_info()
-        self.timeline_canvas.update_timeline()
-        # Fermer le menu offset si ouvert
-        if self.offset_validation_widget.isVisible():
-            self.offset_validation_widget.hide()
-        # Passer à l'onset suivant si possible
-        if self.current_onset_idx < len(self.onsets) - 1:
-            self.next_onset()
+        self.offset_edit_widget.hide()
+        self.redraw()
+        self.next_onset()
         self.setFocus()
-        self.update_onset_filter()  # MAJ immédiate
+        self.update_onset_filter()
 
     def undo_last_action(self):
         self.unsaved_changes = True
@@ -2119,15 +2140,18 @@ Performance Score:
         QMessageBox.warning(self, "Undo", "Unknown action type, cannot undo.")
 
     def accept_and_toggle_offset(self):
-        # Toggle offset menu: ouvrir/fermer sans jamais changer le statut
+    # Toggle offset validation widget
         if self.offset_validation_widget.isVisible():
             self.offset_validation_widget.hide()
             self.accept_btn.setEnabled(True)
             self.edit_btn.setEnabled(True)
             self.reject_btn.setEnabled(True)
             self.setFocus()
+        # Cacher aussi le panneau d'édition si visible
+            if hasattr(self, 'offset_edit_widget') and self.offset_edit_widget.isVisible():
+                self.offset_edit_widget.hide()
             return
-        # Sinon, ouvrir le menu et désactiver les autres boutons
+    # Sinon, ouvrir le menu et désactiver les autres boutons
         self.offset_validation_widget.show()
         self.accept_btn.setEnabled(True)
         self.edit_btn.setEnabled(False)
@@ -2259,6 +2283,8 @@ Performance Score:
             # Always use the current (possibly edited) onset and offset
             start = min(onset, self.timeline_canvas.event_offsets.get(onset, onset))
             end = max(onset, self.timeline_canvas.event_offsets.get(onset, onset))
+            # For export: make offset inclusive
+            export_offset = end + 1 if end > start else end
             if event_type in ['active', 'twitch', 'complex']:
                 mf_df.loc[start:end, event_type] = 1
             # Write status and score only at the onset frame
@@ -2678,16 +2704,42 @@ Performance Score:
         self.export_all_outputs()
         print("Auto-saved project at", dir_path)
 
-    def check_halfway_and_show_mouse(self):
+    def check_mouse_milestones(self):
         total = len(self.onsets)
         non_pending = sum(
             1 for o in self.onsets
             if self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending'
         )
-        if not hasattr(self, '_mouse_shown') or not self._mouse_shown:
-            if total > 0 and non_pending >= total / 2:
-                self.show_mouse_animation()
-                self._mouse_shown = True
+        # 1. Always show at halfway
+        halfway = total // 2
+        if not getattr(self, '_mouse_half_shown', False) and non_pending >= halfway and total > 0:
+            self.show_mouse_animation()
+            self._mouse_half_shown = True
+            # After halfway, set up additional milestones
+            # 1 for 100, 2 for 200, 3 for 300+
+            if total >= 300:
+                n_milestones = 3
+            elif total >= 200:
+                n_milestones = 2
+            elif total >= 100:
+                n_milestones = 1
+            else:
+                n_milestones = 0
+            # Evenly space milestones after halfway, before total
+            if n_milestones > 0:
+                self._mouse_milestones = set([
+                    halfway + ((i+1)*(total-halfway)//(n_milestones+1)) for i in range(n_milestones)
+                ])
+            else:
+                self._mouse_milestones = set()
+            self._mouse_milestones_shown = set()
+            return
+        # 2. After halfway, show at milestone points
+        if getattr(self, '_mouse_half_shown', False) and hasattr(self, '_mouse_milestones'):
+            for milestone in self._mouse_milestones:
+                if non_pending >= milestone and milestone not in self._mouse_milestones_shown:
+                    self.show_mouse_animation()
+                    self._mouse_milestones_shown.add(milestone)
 
     def check_all_validated_and_show_firework(self):
         if not hasattr(self, '_firework_shown') or not self._firework_shown:
