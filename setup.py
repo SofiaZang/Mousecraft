@@ -6,7 +6,7 @@ setup(
     description='Fun GUI for validating motion classifications',
     author='Sofia Zangila & Maxime Reygnier',
     author_email ="szaggila@hotmail.com",
-    url="",
+    url="https://github.com/SofiaZang/mouse_motion_analysis/tree/main",
     license="MIT",
     classifiers=[
         "Programming Language :: Python :: 3",

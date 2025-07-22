@@ -3,6 +3,7 @@ setup.py
 mousecraft/__init__.py
 mousecraft/__main__.py
 mousecraft/gui.py
+mousecraft/mousecraft_startup.py
 mousecraft.egg-info/PKG-INFO
 mousecraft.egg-info/SOURCES.txt
 mousecraft.egg-info/dependency_links.txt

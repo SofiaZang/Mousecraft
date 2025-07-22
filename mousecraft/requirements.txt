@@ -18,3 +18,10 @@ six==1.17.0
 tomlkit==0.11.6
 tzdata==2025.2
 wrapt==1.14.1
+jupyter
+tifffile
+scikit-image
+seaborn
+r-diptest
+statsmodels
+openpyxl

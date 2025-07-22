@@ -1,8 +1,14 @@
 Metadata-Version: 2.1
 Name: mousecraft
 Version: 0.1.0
-Summary: Mouse motion annotation GUI
-Author: Your Name
+Summary: Fun GUI for validating motion classifications
+Home-page: 
+Author: Sofia Zangila & Maxime Reygnier
+Author-email: szaggila@hotmail.com
+License: MIT
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
 Requires-Dist: PyQt5
 Requires-Dist: numpy
 Requires-Dist: pandas

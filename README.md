@@ -1,18 +1,18 @@
 # MouseCraft
 
-A GUI tool for annotating mouse motion events in video.
+A very fun GUI & splendid GUI used for validating behavior annotations.
 
 ## Features
 
-- Load video and motion energy files
-- Annotate, edit, and validate motion events
-- Export results in multiple formats
+- Load video and motion enegry or classification labels
+- Validate, edit, and add motion events
+- Export results in multiple formats (MF, HF) (.npy, .csv) & plot some performance statistics 
 
 ## Installation
 
 ### Using Conda (Recommended)
-```sh
-git clone https://github.com/yourusername/mousecraft.git
+
+git clone https://github.com/SofiaZang/mouse_motion_analysis/tree/main
 cd mousecraft
 conda env create -f environment.yml
 conda activate mousecraft

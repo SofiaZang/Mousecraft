@@ -6,7 +6,7 @@ import sys
 import os
 
 # Path to the main GUI script
-MAIN_GUI_SCRIPT = 'gui.py'
+MAIN_GUI_SCRIPT = 'mousecraft/gui.py'
 
 class StartupWindow(tk.Tk):
     def __init__(self):
