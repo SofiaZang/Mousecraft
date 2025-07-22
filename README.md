@@ -12,7 +12,7 @@ A very fun GUI & splendid GUI used for validating behavior annotations.
 
 ### Using Conda (Recommended)
 
-git clone https://github.com/SofiaZang/mouse_motion_analysis/tree/main
+git clone https://github.com/SofiaZang/mouse_motion_analysis
 cd mousecraft
 conda env create -f environment.yml
 conda activate mousecraft
