@@ -1,0 +1,13 @@
+name: mousecraft
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pyqt
+  - numpy
+  - pandas
+  - matplotlib
+  - pip
+  - pip:
+      - opencv-python

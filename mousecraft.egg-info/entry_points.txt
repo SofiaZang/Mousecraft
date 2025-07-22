@@ -1,0 +1,2 @@
+[console_scripts]
+mousecraft = mousecraft.gui:main

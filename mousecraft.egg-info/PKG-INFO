@@ -1,0 +1,10 @@
+Metadata-Version: 2.1
+Name: mousecraft
+Version: 0.1.0
+Summary: Mouse motion annotation GUI
+Author: Your Name
+Requires-Dist: PyQt5
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: matplotlib
+Requires-Dist: opencv-python
