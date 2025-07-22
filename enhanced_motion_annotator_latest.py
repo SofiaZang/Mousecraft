@@ -515,30 +515,18 @@ class MotionAnnotator(QWidget):
         onset_layout.addLayout(nav_layout)
         self.onset_info_label = QLabel("No onsets loaded")
         onset_layout.addWidget(self.onset_info_label)
-        # Offset validation widget (hidden by default)
-        self.offset_validation_widget = QWidget()
-        offset_val_layout = QHBoxLayout()
-        self.validate_offset_btn = QPushButton("Validate Offset")
-        self.setup_offset_edit_widget()
-        onset_layout.addWidget(self.offset_edit_widget)
-        self.offset_edit_widget.hide()
-        self.edit_offset_btn = QPushButton("Edit Offset")
-        self.validate_offset_btn.clicked.connect(self.validate_offset)
-        self.edit_offset_btn.clicked.connect(self.edit_offset)
-        offset_val_layout.addWidget(self.validate_offset_btn)
-        offset_val_layout.addWidget(self.edit_offset_btn)
-        self.offset_validation_widget.setLayout(offset_val_layout)
-        self.offset_validation_widget.hide()
+
+        # Offset validation widget (hidden by default) - REFACTORED
+        self.setup_offset_validation_widget()  # This will create and configure the new widget
         onset_layout.addWidget(self.offset_validation_widget)
+
         validation_layout = QHBoxLayout()
         self.accept_btn = QPushButton("✓ Accept")
         self.edit_btn = QPushButton("✎ Edit")
         self.reject_btn = QPushButton("✗ Reject")
         self.change_type_btn = QPushButton("Change Type")
         self.undo_btn = QPushButton("↩ Undo")
-        self.accept_btn.clicked.connect(self.accept_and_toggle_offset)
-        self.setup_offset_edit_widget()  # crée offset_edit_widget et offset_lineedit
-        onset_layout.addWidget(self.offset_edit_widget)  # ajoute ce widget dans le layout
+        self.accept_btn.clicked.connect(self.start_offset_validation)  # Changed connection
         self.edit_btn.clicked.connect(self.start_edit_onset)
         self.reject_btn.clicked.connect(lambda: self.validate_onset('rejected'))
         self.change_type_btn.clicked.connect(self.show_change_type_dropdown)
@@ -1208,15 +1196,101 @@ class MotionAnnotator(QWidget):
             idx = self.current_onset_idx - 1
         self.goto_onset(idx)
         
-    def setup_offset_edit_widget(self):
-        self.offset_edit_widget = QWidget()
+    def setup_offset_validation_widget(self):
+        self.offset_validation_widget = QWidget()
         layout = QHBoxLayout()
-        self.edit_offset_spinbox = QSpinBox()
-        self.edit_offset_spinbox.setRange(0, 999999)
-        layout.addWidget(QLabel("Offset:"))
-        layout.addWidget(self.edit_offset_spinbox)
-        self.offset_edit_widget.setLayout(layout)
-        self.offset_edit_widget.hide()
+        layout.addWidget(QLabel("Validate Offset:"))
+        self.offset_edit_spinbox = QSpinBox()
+        self.offset_edit_spinbox.setRange(0, 999999)
+        layout.addWidget(self.offset_edit_spinbox)
+        self.confirm_offset_btn = QPushButton("Validate")
+        self.confirm_offset_btn.clicked.connect(self.confirm_and_accept_offset)
+        layout.addWidget(self.confirm_offset_btn)
+        self.offset_validation_widget.setLayout(layout)
+        self.offset_validation_widget.hide()
+
+    def confirm_and_accept_offset(self):
+        self.unsaved_changes = True
+        new_offset_exclusive = self.offset_edit_spinbox.value()
+        new_offset = new_offset_exclusive - 1  # Convert to inclusive
+
+        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            current_onset = self.filtered_onsets[self.current_onset_idx]
+        else:
+            current_onset = self.onsets[self.current_onset_idx]
+
+        if new_offset < current_onset:
+            QMessageBox.warning(self, "Invalid Offset", "Offset must be greater than or equal to the onset.")
+            return
+
+        # Update data structures
+        self.timeline_canvas.event_offsets[current_onset] = new_offset
+        for event_type, events in self.curated_events.items():
+            for event in events:
+                if event[0] == current_onset:
+                    event[1] = new_offset
+
+        # Set validation status to 'accepted'
+        prev_status = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
+        if prev_status != 'accepted':
+            self.undo_stack.append((current_onset, prev_status))
+            self.timeline_canvas.set_onset_validation(current_onset, 'accepted')
+
+        # Hide widget and re-enable buttons
+        self.offset_validation_widget.hide()
+        self.accept_btn.setEnabled(True)
+        self.edit_btn.setEnabled(True)
+        self.reject_btn.setEnabled(True)
+        self.change_type_btn.setEnabled(True)
+        self.awaiting_offset_validation = False
+
+        # Redraw and move on
+        self.update_performance_display()
+        self.check_mouse_milestones()
+        self.check_all_validated_and_show_firework()
+        self.update_onset_filter()
+
+        # Only advance if the list is not empty
+        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            if self.current_onset_idx < len(self.filtered_onsets) - 1:
+                self.next_onset()
+            else: # if it was the last one, refresh info but don't loop
+                self.goto_onset(self.current_onset_idx)
+
+        self.setFocus()
+
+    def start_offset_validation(self):
+        if not self.onsets:
+            return
+
+        # If widget is already visible, it means user wants to cancel.
+        if self.offset_validation_widget.isVisible():
+            self.offset_validation_widget.hide()
+            self.accept_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.change_type_btn.setEnabled(True)
+            self.setFocus()
+            return
+
+        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            current_onset = self.filtered_onsets[self.current_onset_idx]
+        else:
+            current_onset = self.onsets[self.current_onset_idx]
+
+        current_offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
+        
+        # Prefill the spinbox with the current offset (exclusive, for user display)
+        self.offset_edit_spinbox.setValue(current_offset + 1)
+        self.offset_edit_spinbox.setMinimum(current_onset + 1) # Ensure offset is always > onset
+
+        # Show the validation widget and disable other buttons
+        self.offset_validation_widget.show()
+        self.accept_btn.setEnabled(True) # Keep accept enabled to act as a cancel button
+        self.edit_btn.setEnabled(False)
+        self.reject_btn.setEnabled(False)
+        self.change_type_btn.setEnabled(False)
+        self.setFocus()
 
     def next_onset(self):
         if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
@@ -1245,9 +1319,11 @@ class MotionAnnotator(QWidget):
         # Réactive navigation si on a des onsets filtrés
         self.prev_onset_btn.setEnabled(True)
         self.next_onset_btn.setEnabled(True)
-        self.accept_btn.setEnabled(True)
-        self.reject_btn.setEnabled(True)
-        self.edit_btn.setEnabled(True)
+        # Disable buttons if offset validation is active
+        if not self.offset_validation_widget.isVisible():
+            self.accept_btn.setEnabled(True)
+            self.reject_btn.setEnabled(True)
+            self.edit_btn.setEnabled(True)
         current_onset = self.filtered_onsets[self.current_onset_idx]
         onset_type = self.onset_types.get(current_onset, '')
         if onset_type not in ('active', 'twitch'):
@@ -1317,6 +1393,10 @@ class MotionAnnotator(QWidget):
         self.setFocus()  # Restore focus to main window
 
     def start_edit_onset(self):
+        # Prevent editing if offset validation is in progress
+        if self.offset_validation_widget.isVisible():
+            return
+
         # Si le widget d'édition est déjà visible, le fermer
         if self.edit_widget.isVisible():
             self.edit_widget.hide()
@@ -1944,75 +2024,19 @@ Performance Score:
         # self.edit_btn.setEnabled(False)
 
     def validate_offset(self):
-        # Toggle : si déjà visible, fermer simplement
-        if self.offset_validation_widget.isVisible():
-            self.offset_validation_widget.hide()
-            self.prev_onset_btn.setEnabled(True)
-            self.next_onset_btn.setEnabled(True)
-            self.accept_btn.setEnabled(True)
-            self.reject_btn.setEnabled(True)
-            self.edit_btn.setEnabled(True)
-            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-                current_onset = self.filtered_onsets[self.current_onset_idx]
-            else:
-                current_onset = self.onsets[self.current_onset_idx]
-            status = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
-            if status != 'accepted':
-                self.undo_stack.append((current_onset, status))
-                self.timeline_canvas.set_onset_validation(current_onset, 'accepted')
-                self.update_performance_display()
-                self.update_onset_info()
-            if self.current_onset_idx < len(self.onsets) - 1:
-                self.next_onset()
-            self.setFocus()
-            self.update_onset_filter()  # MAJ immédiate
-            return
-        self.offset_validation_widget.show()
-        self.setFocus()
+        # This method is now obsolete and can be removed.
+        # The logic is handled by start_offset_validation and confirm_and_accept_offset.
+        pass
 
     def edit_offset(self):
-        if self.offset_edit_widget.isVisible():
-           self.offset_edit_widget.hide()
-        else:
-        # Récupère l'offset actuel pour afficher dans spinbox
-            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-               current_onset = self.filtered_onsets[self.current_onset_idx]
-            else:
-               current_onset = self.onsets[self.current_onset_idx]
-            current_offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
-            self.edit_offset_spinbox.setValue(current_offset + 1)
-
-            self.offset_edit_widget.show()
-            self.edit_offset_spinbox.setFocus()
-
-            self.offset_edit_widget.show()
-            self.edit_offset_spinbox.setFocus()
+        # This method is now obsolete and can be removed.
+        # The logic is handled by start_offset_validation and confirm_and_accept_offset.
+        pass
 
     def confirm_edit_offset(self):
-        # Confirm the new offset and hide the widget
-        new_offset_exclusive = self.offset_spinbox.value()
-        new_offset = new_offset_exclusive - 1 # Convert to inclusive
-        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-            current_onset = self.filtered_onsets[self.current_onset_idx]
-        else:
-            current_onset = self.onsets[self.current_onset_idx]
-        if current_onset >= new_offset:
-            QMessageBox.warning(self, "Invalid Offset", "Offset must be greater than onset.")
-            return
-        self.timeline_canvas.event_offsets[current_onset] = new_offset
-        for event_type, events in self.curated_events.items():
-            for event in events:
-                if event[0] == current_onset:
-                    event[1] = new_offset
-        status = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
-        if status != 'accepted':
-            self.undo_stack.append((current_onset, status))
-            self.timeline_canvas.set_onset_validation(current_onset, 'accepted')
-        self.offset_edit_widget.hide()
-        self.redraw()
-        self.next_onset()
-        self.setFocus()
-        self.update_onset_filter()
+        # This method is now obsolete and can be removed.
+        # The logic is handled by start_offset_validation and confirm_and_accept_offset.
+        pass
 
     def undo_last_action(self):
         self.unsaved_changes = True
