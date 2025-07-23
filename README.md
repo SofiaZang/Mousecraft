@@ -19,26 +19,25 @@ For local installation (tried in Windows, to be tried in other os's)
 2.  Open an anaconda prompt / command prompt with conda for python 3 in the path.
 Navigate where you want the mousecraft to live.
 
-3. In the command prompt ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/mouse_motion_analysis .
-If this does not work, do the same using, git clone in GitBash.
+3. In the command prompt ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
+If this does not work, do the git clone in GitBash.
 
-4. Do 'cd mousecraft' to go into the root folder of mousecraft gui.
-5. Then create a new environment with 'conda env create -f environment.yml' .
-Friendly tip: Make sure to have at least 1-2 GB free on your main disk.
-
-6. This creates the mousecraft envinroment, which you can then activate running 'conda activate mousecraft'
+4. Do ``cd mousecraft`` to go into the root folder of mousecraft gui.
+5. Then create a new environment with ``conda env create -f environment.yml`` .
+  
+6. This creates the mousecraft envinroment, which you can then activate running ``conda activate mousecraft``
    
-7.Once env is activated do: 'pip install -e .' 
+7.Once env is activated do: ``pip install -e .`` 
 This installs mousecraft to your local repository!
 
-8. Now run 'python -m mousecraft' and you're all set. 
-You can also try just 'mousecraft' but in case this won't work use the abobe command.
+8. Now run ``python -m mousecraft`` and you're all set. 
+You can also try just ``mousecraft`` but in case this won't work use the abobe command.
 
 ### Using pip only
 
-Another way to install mousecraft via pip is:
+Another way to install the mousecraft package via pip is:
 
-'pip install git+https://github.com/SofiaZang/Mousecraft.git' in the same directory where you want the mousecraft repository to live in.
+``pip install git+https://github.com/SofiaZang/Mousecraft.git`` in the same directory where you want the mousecraft repository to live in.
 
 Everytime you want to use Mousecraft, you have to first run 'conda activate mousecraft' and then: 'mousecraft' or 'python -m mousecraft' 
 
