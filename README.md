@@ -22,21 +22,25 @@ Navigate where you want the mousecraft to live.
 3. In the command prompt git clone https://github.com/SofiaZang/mouse_motion_analysis.git mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/mouse_motion_analysis .
 If this does not work, do the same using, git clone in GitBash.
 
-4. Do cd mousecraft to go into the root folder of mousecraft gui. Then create a new environment with conda env create -f environment.yml . Friendly tip: Make sure to have at least 1-2 GB free on your main disk. This creates the mousecraft envinroment, which you can then activate running: conda activate mousecraft
+4. Do 'cd mousecraft' to go into the root folder of mousecraft gui.
+5. Then create a new environment with 'conda env create -f environment.yml' .
+Friendly tip: Make sure to have at least 1-2 GB free on your main disk.
 
-Once env is activated do: pip install -e . 
+6. This creates the mousecraft envinroment, which you can then activate running 'conda activate mousecraft'
+   
+7.Once env is activated do: 'pip install -e .' 
 This installs mousecraft to your local repository!
 
-Now run python -m mousecraft and you're all set. 
-You can also try just: mousecraft but in case this won't work use the abobe command.
+8. Now run 'python -m mousecraft' and you're all set. 
+You can also try just 'mousecraft' but in case this won't work use the abobe command.
 
 ### Using pip only
 
 Another way to install mousecraft via pip is:
 
-pip install git+https://github.com/yourusername/mousecraft.git in the same directory where you want the mousecraft repository to live in.
+'pip install git+https://github.com/yourusername/mousecraft.git' in the same directory where you want the mousecraft repository to live in.
 
-Everytime you want to use mousecraft, you have to first run: conda activate mousecraft and then: mousecraft or python -m mousecraft 
+Everytime you want to use Mousecraft, you have to first run 'conda activate mousecraft' and then: 'mousecraft' or 'python -m mousecraft' 
 
 <img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
 
