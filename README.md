@@ -104,37 +104,103 @@ The interface is divided into two main panels:
 Left Panel: Video playback and control
 Right Panel: Motion energy timeline, event navigation, and annotation tools
 
-1. Video Display & Controls (Left Panel)
+### Video Display & Controls (Left Panel)
 
-### Video Display
+#### Video Display
 Main video window: Displays the loaded video of the mouse behavior. 
 Shows frame-by-frame playback and updates when navigating events.
 
-### Load Video
+#### Load Video
 
 Button: Load Video
 Opens a file dialog to select a video file (.avi, .mp4, .mov, .tiff, etc.).
 
-### Playback Controls
+#### Playback Controls
 
 Play ▶: Starts playing the video from the current frame at the defined FPS.
 Pause ⏸: Pauses playback but keeps the current frame in view.
 Stop ⏹: Stops playback and resets to frame 0.
 
-### FPS Control
+#### FPS Control
 Textbox (FPS): Defines frames per second for playback speed (e.g., enter 5 for 5 fps). By default the movie will play at 1 fps.
 
-### Frame Slider
+#### Frame Slider
 Allows manual scrubbing through frames of the loaded video. You can also just write the frame you want to check and you will be teleported there.
 
-2. Onset Status and Performance Metrics
+### Onset Status and Performance Metrics
 
-### Onset Status
+#### Onset Status
 Displays whether the current frame corresponds to an annotated onset (e.g., Active/Twitch).
 
-### Performance Score
+#### Performance Score
 Text box displaying annotation statistics. Accepted = 1, Rejected = -1, Edited = 0.5, Pending = 0, Manually-added = 0. 
 This can be adjusted (in the main gui code).
+
+### Save & Export
+
+#### Export Folder
+Field + Button (...): Choose where to save annotations and outputs.
+
+Mousecraft also saves automatically every 20 min if you have performed at least one action within these 20 min. First autosave asks you for the output path and then  its set for the following saves. If you close mousecraft before having finished the validation, you will see the curernt progress saved as _pending files. Once you complete and no pending events remain, the output files will overwrite any pending ones and be saved as _final.
+
+Tip: In case you have made some mistake and an event overlaps with another, an error message appears before save.
+
+### Motion Energy Timeline (Right Panel)
+
+#### Timeline Plot
+Displays the motion energy trace over frames.
+
+#### Load Motion Energy
+Loads a precomputed motion energy file (.csv, .xlsx, .npy).
+
+#### Load Classifications
+
+Loads precomputed event classifications (Active/Twitch events) for review and editing.
+
+Annotated events appear as colored spans: Yellow: Active events, Purple: Twitch events, Green/Red/Orange dots: Validation status (Accepted, Rejected, Edited).
+
+#### Zoom Controls
+🔍+ / 🔍-: Zoom in and out of the timeline.
+Reset Zoom: Resets timeline view to full length.
+
+### Event Navigation & Validation
+
+#### Dropdown filters:
+Event Type: Filter events by type (All, Active, Twitch). This allows you to navigate around only the chosen events.
+
+Event Status: Filter events by validation status (All, Accepted, Rejected, Edited, Manually Added, Pending). Same as above, navigate only in the status of interest events.
+
+#### Navigation Buttons
+← Prev Onset / Next Onset →: Move between annotated events based on current filters.
+
+#### Validation Controls
+
+✓ Accept: Marks event as accepted.
+
+✎ Edit: Allows manual editing of event onset/offset frames. If you only change the offset, a message will appear asking you if you accept the given defined onset or want to change it also.
+
+✗ Reject: Marks event as rejected. This event then disappears.
+
+Change Type: Changes an event’s type (e.g., Twitch → Active).
+
+↩ Undo: Reverts the last validation action.
+
+### Manual Event Addition
+
+#### Event Type:
+Dropdown to choose event type (Twitch, Active, Complex) for manual annotation.
+
+#### Onset / Offset Frame
+Spinboxes to manually enter frame numbers for onset and offset of new events.
+
+#### Set Current Frame
+Buttons to set the current video frame as onset or offset.
+
+#### Add Event
+Adds the new event to the annotation timeline. If the added or edited event overlaps fully with another event, the automatic event will be rejected and this new addition kept.
+
+#### Edit Threshold (frames)
+This matters for accuracy tracking. Sets the frame tolerance used when classifying edited events (e.g., 5 means ±5 frames from original is considered “minor edit” the status is edited but the dot is Green and the score is +1). This can be adjusted per user. (If for example the signal is averaged 5 times, we keep the tolerance at 5 frames).
 
 ## License
 
