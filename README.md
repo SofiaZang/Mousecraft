@@ -38,11 +38,11 @@ pip install git+https://github.com/yourusername/mousecraft.git in the same direc
 
 Everytime you want to use mousecraft, you have to first run: conda activate mousecraft and then: mousecraft or python -m mousecraft 
 
-![alt text](image-1.png)
- 
+<img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
+
 Friendly tip #2: Do not attempt to exit, it won't work :) 
 
-<img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
+<img width="1905" height="1023" alt="mousecraft_gui" src="https://github.com/user-attachments/assets/7986e9d6-0633-4c6e-9bbf-e4147a85b8b1" />
 
 ## Dependencies
 
