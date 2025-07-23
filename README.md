@@ -97,8 +97,7 @@ See examples in this notebook https://colab.research.google.com/drive/1Sfts_onqz
 
 Tips: For the notebook to run you need the motion_energy.npy (or other motion_signal.npy) or the .tiff file of the behavior you want to annotate if you have not computed the motion energy and it will be automatically computed in the notebook run.
 
-## Settings & Display 
-
+## Using the GUI
 The interface is divided into two main panels:
 
 Left Panel: Video playback and control
