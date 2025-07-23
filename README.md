@@ -58,7 +58,7 @@ dependencies:
   - scikit-learn
   - scipy
   - tqdm
-  - opencv-python
+  - opencv
   - pyqt
   - r-diptest 
   - pip
