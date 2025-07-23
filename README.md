@@ -202,6 +202,30 @@ Adds the new event to the annotation timeline. If the added or edited event over
 #### Edit Threshold (frames)
 This matters for accuracy tracking. Sets the frame tolerance used when classifying edited events (e.g., 5 means ±5 frames from original is considered “minor edit” the status is edited but the dot is Green and the score is +1). This can be adjusted per user. (If for example the signal is averaged 5 times, we keep the tolerance at 5 frames).
 
+## Mousecraft outputs
+
+### Main outputs:
+
+Mousecraft currently outputs 2 main outputs in .npy and .csv format:
+
+#### validation_HF (Human Friendly) 
+
+<img width="400" height="223" alt="image" src="https://github.com/user-attachments/assets/b12a4357-8e9a-4809-9985-815b4dfe9f56" />
+
+#### validation_MF (Machine Friendly)
+
+<img width="613" height="509" alt="image" src="https://github.com/user-attachments/assets/dac8431f-fa92-4e61-855c-a574f600e2db" />
+
+Same information but each line is a frame (in same format as input .csv) and this is the input when you continue validation from _pending.
+
+#### Other outputs:
+
+and also 2 .pngs and .json that showcase the overall performance of mousecraft validation
+
+<img width="1359" height="1011" alt="validation_status_pie_final" src="https://github.com/user-attachments/assets/c936c207-6bcf-4b6c-a2ae-f25b42b73d14" />
+<img width="4472" height="1676" alt="validation_comparison_plot_final" src="https://github.com/user-attachments/assets/6ead7ed5-d7c9-4074-a92d-6bbec33706d5" />
+<img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
+
 ## License
 
 [Your License Here]
