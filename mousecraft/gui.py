@@ -2859,14 +2859,24 @@ Performance Score:
             self.change_type_dropdown.deleteLater()
             self.change_type_dropdown = None
 
-def main():
-    import sys
+
+def main(): # launches play button and then main mousecraft 
+    import sys, subprocess, os
     from PyQt5.QtWidgets import QApplication
+
+    # Path to startup script
+    startup_script = os.path.join(os.path.dirname(__file__), "mousecraft_startup.py")
+
+    # Wait for startup to close
+    subprocess.run([sys.executable, startup_script])
+
+    # Now launch PyQt GUI
     app = QApplication(sys.argv)
     annotator = MotionAnnotator()
     annotator.pause_btn.raise_()
     annotator.show()
     sys.exit(app.exec_())
 
+
 if __name__ == '__main__':
-    main() 
+    main()

@@ -6,7 +6,7 @@ import sys
 import os
 
 # Path to the main GUI script
-MAIN_GUI_SCRIPT = 'mousecraft/gui.py'
+MAIN_GUI_SCRIPT = 'mousecraft/gui.py' # why this works ? check this if at some point it doesn't
 
 class StartupWindow(tk.Tk):
     def __init__(self):
@@ -49,13 +49,12 @@ class StartupWindow(tk.Tk):
         self.exit_btn = tk.Button(self, text='Exit', font=('Arial', 24, 'bold'), width=12, command=self.exit_popup, bg='#F44336', fg='white', activebackground='#B71C1C', activeforeground='white')
         self.exit_btn.place(relx=0.5, rely=0.75, anchor='center')
 
-    def launch_main_gui(self):
+    def launch_main_gui(self): # launch main when this one closes 
+        """Close startup window; main GUI will be launched by gui.py"""
         self.destroy()
-        # Launch the main GUI script with the same Python interpreter
-        subprocess.Popen([sys.executable, MAIN_GUI_SCRIPT])
 
     def exit_popup(self):
-        # Show a popup that can only be closed
+        # Show popup that prevents exit
         popup = tk.Toplevel(self)
         popup.title('No Exit')
         popup.geometry('350x120')
@@ -65,8 +64,9 @@ class StartupWindow(tk.Tk):
         label.pack(pady=20)
         close_btn = tk.Button(popup, text='Close', font=('Arial', 14), command=popup.destroy)
         close_btn.pack(pady=5)
-        popup.protocol('WM_DELETE_WINDOW', lambda: None)  # Disable window close (X) button
+        popup.protocol('WM_DELETE_WINDOW', lambda: None)  # Disable X button
+
 
 if __name__ == '__main__':
     app = StartupWindow()
-    app.mainloop() 
+    app.mainloop()
