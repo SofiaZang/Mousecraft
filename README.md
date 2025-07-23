@@ -1,6 +1,8 @@
 # MouseCraft                                                                   
 
-                                                                                            <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/59da2cab-d9f0-4784-ab88-6c3238f25626" /> 
+                                                                                            
+                                                                          <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/6005bf0d-8776-4380-8edd-b1a1d137aff6" />
+
                                                                                             
 A very fun GUI & splendid GUI used for validating behavior annotations.
 
