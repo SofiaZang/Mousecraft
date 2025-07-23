@@ -2865,7 +2865,7 @@ def main(): # launches play button and then main mousecraft
     from PyQt5.QtWidgets import QApplication
 
     # Path to startup script
-    startup_script = os.path.join(os.path.dirname(__file__), "mousecraft_startup.py")
+    startup_script = os.path.join(os.path.dirname(__file__), "mousecraft.py")
 
     # Wait for startup to close
     subprocess.run([sys.executable, startup_script])
