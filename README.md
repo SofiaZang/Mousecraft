@@ -81,7 +81,7 @@ dependencies:
       - statsmodels
 
 
-### Inputs
+## Inputs
 Input formats: 
 
 Mousecraft accepts any .npy file of the motion signal you have eg. motion_energy.npy or if you have run the automatic classification notebook then the annotation labels saves as 
@@ -96,7 +96,46 @@ Mousecraft looks for all inputs in the folder you define.
 See examples in this notebook https://colab.research.google.com/drive/1Sfts_onqzadvvcDXfVnDBEA_10ic7_YI?usp=sharing
 
 Tips: For the notebook to run you need the motion_energy.npy (or other motion_signal.npy) or the .tiff file of the behavior you want to annotate if you have not computed the motion energy and it will be automatically computed in the notebook run.
- 
+
+## Settings & Display 
+
+The interface is divided into two main panels:
+
+Left Panel: Video playback and control
+Right Panel: Motion energy timeline, event navigation, and annotation tools
+
+1. Video Display & Controls (Left Panel)
+
+### Video Display
+Main video window: Displays the loaded video of the mouse behavior. 
+Shows frame-by-frame playback and updates when navigating events.
+
+### Load Video
+
+Button: Load Video
+Opens a file dialog to select a video file (.avi, .mp4, .mov, .tiff, etc.).
+
+### Playback Controls
+
+Play ▶: Starts playing the video from the current frame at the defined FPS.
+Pause ⏸: Pauses playback but keeps the current frame in view.
+Stop ⏹: Stops playback and resets to frame 0.
+
+### FPS Control
+Textbox (FPS): Defines frames per second for playback speed (e.g., enter 5 for 5 fps). By default the movie will play at 1 fps.
+
+### Frame Slider
+Allows manual scrubbing through frames of the loaded video. You can also just write the frame you want to check and you will be teleported there.
+
+2. Onset Status and Performance Metrics
+
+### Onset Status
+Displays whether the current frame corresponds to an annotated onset (e.g., Active/Twitch).
+
+### Performance Score
+Text box displaying annotation statistics. Accepted = 1, Rejected = -1, Edited = 0.5, Pending = 0, Manually-added = 0. 
+This can be adjusted (in the main gui code).
+
 ## License
 
 [Your License Here]
