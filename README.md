@@ -42,7 +42,7 @@ Everytime you want to use mousecraft, you have to first run: conda activate mous
  
 Friendly tip #2: Do not attempt to exit, it won't work :) 
 
-![alt text](image.png)
+<img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
 
 ## Dependencies
 
