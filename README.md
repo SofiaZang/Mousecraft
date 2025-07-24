@@ -1,6 +1,6 @@
 # MouseCraft                                                     <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/85e1e2fc-9308-42e5-8c03-8616f15092d6" />
                                                                                                                                                                                                                                          
-A very fun GUI & splendid GUI used for validating behavior annotations.
+A fun & splendid GUI used for validating behavior annotations.
 
 ## Features
 
@@ -230,4 +230,4 @@ and also 2 .pngs and .json that showcase the overall performance of mousecraft v
 
 ## License
 
-[Your License Here]
+TODO 
