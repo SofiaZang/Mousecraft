@@ -39,7 +39,7 @@ Another way to install the mousecraft package via pip is:
 
 ``pip install git+https://github.com/SofiaZang/Mousecraft.git`` in the same directory where you want the mousecraft repository to live in.
 
-Everytime you want to use Mousecraft, you have to first run 'conda activate mousecraft' and then: 'mousecraft' or 'python -m mousecraft' 
+Everytime you want to use Mousecraft, you have to first run ``conda activate mousecraft`` and then: ``mousecraft`` or ``python -m mousecraft`` 
 
 <img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
 
