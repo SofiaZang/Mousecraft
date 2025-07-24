@@ -61,7 +61,6 @@ dependencies:
   - tqdm
   - opencv
   - pyqt
-  - r-diptest 
   - pip
   - pip:
       - colorama==0.4.6
@@ -71,12 +70,12 @@ dependencies:
       - lazy-object-proxy==1.9.0
       - mccabe==0.7.0
       - pylint==2.16.1
-      - PySimpleGUI==5.0.8.3
-      - python-dateutil==2.9.0.post0
-      - pytz==2025.2
+      - PySimpleGUI
+      - python-dateutil
+      - pytz
       - six==1.17.0
       - tomlkit==0.11.6
-      - tzdata==2025.2
+      - tzdata
       - wrapt==1.14.1
       - jupyter
       - tifffile
