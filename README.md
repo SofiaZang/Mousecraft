@@ -22,7 +22,7 @@ Navigate where you want the mousecraft to live.
 3. In the command prompt ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
 If this does not work, do the git clone in GitBash.
 
-4. Do ``cd mousecraft`` to go into the root folder of mousecraft gui.
+4. Do ``cd Mousecraft`` to go into the root folder of mousecraft gui.
 5. Then create a new environment with ``conda env create -f environment.yml`` .
   
 6. This creates the mousecraft envinroment, which you can then activate running ``conda activate mousecraft``
