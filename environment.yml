@@ -11,11 +11,11 @@ dependencies:
   - scikit-learn
   - scipy
   - tqdm
-  - opencv
   - pyqt
   - r-diptest 
   - pip
-  - pip:
+  - pip
+      - opencv-python # moved 
       - colorama==0.4.6
       - dill==0.3.6
       - et_xmlfile==2.0.0
