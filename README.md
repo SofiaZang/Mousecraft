@@ -230,4 +230,4 @@ and also 2 .pngs and .json that showcase the overall performance of mousecraft v
 
 ## License
 
-TODO 
+MIT 
