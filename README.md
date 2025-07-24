@@ -23,15 +23,16 @@ Navigate where you want the mousecraft to live.
 If this does not work, do the git clone in GitBash.
 
 4. Do ``cd Mousecraft`` to go into the root folder of mousecraft gui.
-5. Then create a new environment with ``conda env create -f environment.yml`` .
-  
-6. This creates the mousecraft envinroment, which you can then activate running ``conda activate mousecraft``
    
-7.Once env is activated do: ``pip install -e .`` 
+5. Then create a new environment with ``conda env create -f environment.yml`` . In case creating this environment takes too long, try doing so, in miniconda prompt or else stay in anaconda prompt use conda forge like so: ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``
+  
+6. This creates the mousecraft envinroment, which you can then activate running ``conda activate mousecraft`` . 
+   
+7. Once env is activated do: ``pip install -e .`` 
 This installs mousecraft to your local repository!
 
 8. Now run ``python -m mousecraft`` and you're all set. 
-You can also try just ``mousecraft`` but in case this won't work use the abobe command.
+You can also try just ``mousecraft`` but in case this won't work use the above command.
 
 ### Using pip only
 
