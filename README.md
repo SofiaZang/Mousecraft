@@ -1,4 +1,4 @@
-# MouseCraft                                                     <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/85e1e2fc-9308-42e5-8c03-8616f15092d6" />
+# Mousecraft                                                     <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/85e1e2fc-9308-42e5-8c03-8616f15092d6" />
                                                                                                                                                                                                                                          
 A fun & splendid GUI used for validating behavior annotations.
 
@@ -61,7 +61,6 @@ dependencies:
   - tqdm
   - opencv
   - pyqt
-  - r-diptest 
   - pip
   - pip:
       - colorama==0.4.6
@@ -71,12 +70,12 @@ dependencies:
       - lazy-object-proxy==1.9.0
       - mccabe==0.7.0
       - pylint==2.16.1
-      - PySimpleGUI==5.0.8.3
-      - python-dateutil==2.9.0.post0
-      - pytz==2025.2
+      - PySimpleGUI
+      - python-dateutil
+      - pytz
       - six==1.17.0
       - tomlkit==0.11.6
-      - tzdata==2025.2
+      - tzdata
       - wrapt==1.14.1
       - jupyter
       - tifffile
@@ -231,4 +230,4 @@ and also 2 .pngs and .json that showcase the overall performance of mousecraft v
 
 ## License
 
-TODO 
+MIT 
