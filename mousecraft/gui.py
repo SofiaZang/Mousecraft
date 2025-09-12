@@ -534,17 +534,49 @@ class MotionAnnotator(QWidget):
         right_panel.addWidget(self.motion_energy_folder_label)
         timeline_group = QGroupBox("Motion Energy Timeline")
         timeline_layout = QVBoxLayout()
+        # Container to constrain total timeline height when using two stacked timelines
+        timeline_container = QWidget()
+        timeline_container_layout = QVBoxLayout()
+        timeline_container_layout.setContentsMargins(0, 0, 0, 0)
+        timeline_container_layout.setSpacing(2)
+        self.timeline_splitter = QSplitter(Qt.Vertical)
+        # First timeline (primary)
         self.timeline_canvas = DraggableTimeline()
         # Sync event type colors mapping to timeline canvas
         try:
             self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
         except Exception:
             pass
-        self.timeline_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Allow more vertical expansion
-        self.timeline_canvas.setMinimumHeight(350)  # Increased minimum height
-        self.timeline_canvas.setMaximumHeight(500)  # Increased maximum height
-        self.timeline_canvas.timeline_moved.connect(self.timeline_frame_changed)
-        timeline_layout.addWidget(self.timeline_canvas)
+        self.timeline_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.timeline_canvas.setMinimumHeight(200)
+        self.timeline_canvas.setMaximumHeight(500)
+        self.timeline_canvas.timeline_moved.connect(self.timeline_frame_changed_primary)
+        # Second timeline (secondary input)
+        self.timeline_canvas2 = DraggableTimeline()
+        try:
+            self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+        except Exception:
+            pass
+        self.timeline_canvas2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.timeline_canvas2.setMinimumHeight(200)
+        self.timeline_canvas2.setMaximumHeight(500)
+        self.timeline_canvas2.timeline_moved.connect(self.timeline_frame_changed_secondary)
+        # Add both to vertical splitter; hide second until used
+        self.timeline_splitter.addWidget(self.timeline_canvas)
+        self.timeline_splitter.addWidget(self.timeline_canvas2)
+        self.timeline_canvas2.hide()
+        # Equal space when both visible
+        self.timeline_splitter.setSizes([1, 1])
+        timeline_container_layout.addWidget(self.timeline_splitter)
+        timeline_container.setLayout(timeline_container_layout)
+        # Constrain the combined timelines height so controls below stay visible
+        timeline_container.setMaximumHeight(520)
+        timeline_container.setMinimumHeight(400)
+        timeline_layout.addWidget(timeline_container)
+        # Secondary signal annotations store (separate from primary)
+        self.onsets2 = []
+        self.onset_types2 = {}
+        self.active_timeline_index = 1
         
         # Add custom zoom in/out and reset buttons (same style as video zoom)
         zoom_btn_layout = QHBoxLayout()
@@ -563,7 +595,7 @@ class MotionAnnotator(QWidget):
         self.load_input_btn = QPushButton("Load an input")
         self.load_input_btn.clicked.connect(self.load_input)
         self.add_second_input_btn = QPushButton("Add a second input")
-        self.add_second_input_btn.clicked.connect(self.load_input)
+        self.add_second_input_btn.clicked.connect(self.load_second_input)
         timeline_controls.addWidget(self.load_input_btn)
         timeline_controls.addWidget(self.add_second_input_btn)
         timeline_layout.addLayout(timeline_controls)
@@ -757,6 +789,8 @@ class MotionAnnotator(QWidget):
             pass
         self.video_stack_layout.setStretch(0, 1)
         self.video_stack_layout.setStretch(1, 1)
+        # Reset second camera zoom so it is not oddly zoomed on add
+        self.reset_video_zoom(target=2)
         # Trigger a repaint at current frame for both cameras
         self.show_frame(self.current_frame)
         
@@ -886,6 +920,48 @@ class MotionAnnotator(QWidget):
             self.maybe_start_auto_save()
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to load input: {str(e)}')
+            import traceback
+            traceback.print_exc()
+
+    def load_second_input(self):
+        """Load a second motion input and display it on the secondary timeline without changing overall layout sizing."""
+        fname, _ = QFileDialog.getOpenFileName(self, 'Load second input', '', 'Motion (*.npy *.csv *.xlsx)')
+        if not fname:
+            return
+        try:
+            lower = fname.lower()
+            if lower.endswith('.npy'):
+                second_motion = np.load(fname)
+            elif lower.endswith('.csv'):
+                df = pd.read_csv(fname)
+                second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+            elif lower.endswith('.xlsx'):
+                df = pd.read_excel(fname)
+                second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+            else:
+                QMessageBox.warning(self, 'Unsupported file', 'Please select a .csv, .xlsx, or .npy file for the second input.')
+                return
+            # Prepare and plot on secondary timeline
+            # Align length to primary timeline if necessary for xlim
+            total_frames2 = len(second_motion)
+            self.timeline_canvas2.total_frames = total_frames2
+            self.timeline_canvas2.motion_energy = second_motion
+            self.timeline_canvas2.onsets = []
+            self.timeline_canvas2.onset_types = {}
+            self.timeline_canvas2.event_offsets = {}
+            self.timeline_canvas2.current_frame = getattr(self.timeline_canvas, 'current_frame', 0)
+            self.timeline_canvas2.plot_motion_energy(second_motion, [], {}, {}, None)
+            # Initialize separate annotation stores for second signal
+            self.onsets2 = []
+            self.onset_types2 = {}
+            self.timeline_canvas2.event_offsets = {}
+            # Show second timeline and equalize space
+            self.timeline_canvas2.show()
+            self.timeline_splitter.setSizes([1, 1])
+            # Keep both timelines aligned on x when zooming via main controls
+            self.reset_zoom_timeline()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Failed to load second input: {str(e)}')
             import traceback
             traceback.print_exc()
 
@@ -1119,20 +1195,31 @@ class MotionAnnotator(QWidget):
                 f"An event must have a duration of at least 1 frame.\n"
                 f"Please set the offset to a frame number higher than {onset}.")
             return
-        if onset in self.onsets:
+        # Choose target store: primary (1) or secondary (2)
+        target_secondary = hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible() and self.active_timeline_index == 2
+        if target_secondary:
+            target_onsets = self.onsets2
+            target_types = self.onset_types2
+            target_offsets = self.timeline_canvas2.event_offsets
+        else:
+            target_onsets = self.onsets
+            target_types = self.onset_types
+            target_offsets = self.timeline_canvas.event_offsets
+        if onset in target_onsets:
             QMessageBox.warning(self, "Warning", f"Event at frame {onset} already exists")
             return
 
         offset_inclusive = offset_exclusive - 1
 
-        # Check for overlap with existing events (ignore rejected)
+        # Check for overlap with existing events in the selected target only (ignore rejected)
         overlapping = []
-        for other_onset in self.onsets:
-            if self.timeline_canvas.onset_validations.get(other_onset, 'pending') == 'rejected':
+        for other_onset in target_onsets:
+            validations = self.timeline_canvas2.onset_validations if target_secondary else self.timeline_canvas.onset_validations
+            if validations.get(other_onset, 'pending') == 'rejected':
                 continue
-            other_offset = self.timeline_canvas.event_offsets.get(other_onset, other_onset)
+            other_offset = target_offsets.get(other_onset, other_onset)
             if (onset <= other_offset and offset_inclusive >= other_onset) and not (onset < other_onset and offset_inclusive > other_offset):
-                overlapping.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
+                overlapping.append((other_onset, other_offset, target_types.get(other_onset, 'unknown')))
         if overlapping:
             msg = "This event overlaps with existing events:\n\n"
             for o, off, typ in overlapping:
@@ -1143,24 +1230,37 @@ class MotionAnnotator(QWidget):
                 return
         # Check for total overlap and prompt BEFORE adding, exclude itself
         self.check_total_overlap_and_prompt(onset, offset_inclusive, exclude_onsets=onset)
-        # Ajoute aux structures principales (une seule fois)
-        self.onsets.append(onset)
-        self.onset_types[onset] = event_type
-        self.timeline_canvas.event_offsets[onset] = offset_inclusive
+        # Ajoute aux structures pour la timeline ciblée
+        target_onsets.append(onset)
+        target_types[onset] = event_type
+        target_offsets[onset] = offset_inclusive
         # Set validation status to manually added
-        self.timeline_canvas.onset_validations[onset] = 'manually added'
-        # Update curated events
-        if event_type not in self.curated_events:
-            self.curated_events[event_type] = []
-        self.curated_events[event_type].append([onset, offset_inclusive, 0])  # 0 = manually added
+        if target_secondary:
+            if not hasattr(self.timeline_canvas2, 'onset_validations'):
+                self.timeline_canvas2.onset_validations = {}
+            self.timeline_canvas2.onset_validations[onset] = 'manually added'
+        else:
+            self.timeline_canvas.onset_validations[onset] = 'manually added'
+        # Update curated events (primary only, keep existing behavior)
+        if not target_secondary:
+            if event_type not in self.curated_events:
+                self.curated_events[event_type] = []
+            self.curated_events[event_type].append([onset, offset_inclusive, 0])
         # Sort onsets to maintain chronological order
-        self.onsets = sorted(self.onsets)
+        if target_secondary:
+            self.onsets2 = sorted(self.onsets2)
+        else:
+            self.onsets = sorted(self.onsets)
         # Store in undo stack
-        self.undo_stack.append(('add_manual', onset, event_type, offset_inclusive))
+        self.undo_stack.append(('add_manual_2' if target_secondary else 'add_manual', onset, event_type, offset_inclusive))
         # Redraw timeline and refresh filtered onsets/counter immediately
         self.update_onset_filter()
         self.update_onset_info()
-        self.redraw()
+        if target_secondary:
+            # Only redraw second timeline
+            self.timeline_canvas2.plot_motion_energy_preserve_view(self.timeline_canvas2.motion_energy, self.onsets2, self.onset_types2, self.timeline_canvas2.event_offsets, None)
+        else:
+            self.redraw()
         # Navigation logic after adding:
         if overlapping:
             # Go to the first overlapped onset
@@ -1173,7 +1273,7 @@ class MotionAnnotator(QWidget):
                 self.goto_onset(idx)
         else:
             # Go to the next event in the filtered list after adding
-            if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
+            if not target_secondary and hasattr(self, 'filtered_onsets') and self.filtered_onsets:
                 if onset in self.filtered_onsets:
                     idx = self.filtered_onsets.index(onset)
                     next_idx = idx + 1 if idx < len(self.filtered_onsets) - 1 else 0
@@ -1183,8 +1283,7 @@ class MotionAnnotator(QWidget):
                     new_idx = self.onsets.index(onset)
                     self.goto_onset(new_idx)
             else:
-                new_idx = self.onsets.index(onset)
-                self.goto_onset(new_idx)
+                pass
         QMessageBox.information(self, "Success", f"Added {event_type} event from frame {onset} to {offset_exclusive}")
         # After successful add, reset dropdown to placeholder
         self.event_type_combo.setCurrentIndex(0)
@@ -1376,28 +1475,41 @@ class MotionAnnotator(QWidget):
     def slider_moved(self, value):
         self.current_frame = value
         self.show_frame(value)
+        # Sync both timelines' cursor when slider moves
         self.timeline_canvas.current_frame = value
         self.timeline_canvas.update_timeline()
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+            self.timeline_canvas2.current_frame = value
+            self.timeline_canvas2.update_timeline()
         self.update_onset_info()  # Ne change pas l'onset courant
         # Toggle loop button availability
         if hasattr(self, 'loop_btn'):
             self.loop_btn.setEnabled(value in getattr(self, 'onsets', []))
 
-    def timeline_frame_changed(self, frame):
+    def _sync_frame_all(self, frame):
         self.current_frame = frame
         self.frame_slider.setValue(frame)
         self.show_frame(frame)
+        # Update both timelines' red cursor
         self.timeline_canvas.current_frame = frame
         self.timeline_canvas.update_timeline()
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+            self.timeline_canvas2.current_frame = frame
+            self.timeline_canvas2.update_timeline()
         # Only update spinbox if it's not currently being edited
         if not self.frame_spinbox.hasFocus():
             self.frame_spinbox.blockSignals(True)
             self.frame_spinbox.setValue(frame)
             self.frame_spinbox.blockSignals(False)
-        self.update_onset_info()  # Ne change pas l'onset courant
-        # Toggle loop button availability
+        self.update_onset_info()
         if hasattr(self, 'loop_btn'):
             self.loop_btn.setEnabled(frame in getattr(self, 'onsets', []))
+
+    def timeline_frame_changed_primary(self, frame):
+        self._sync_frame_all(frame)
+
+    def timeline_frame_changed_secondary(self, frame):
+        self._sync_frame_all(frame)
 
     def update_frame_info(self):
         # Update spinbox and total frames label
@@ -2217,6 +2329,14 @@ Average Score: {avg_score:.3f}
             if self.cap is not None:
                 self.show_frame(self.current_frame)
             return True
+        if obj == self.second_video_label and event.type() == event.Show:
+            try:
+                self.video_stack_layout.setStretch(0, 1)
+                self.video_stack_layout.setStretch(1, 1)
+                self.reset_video_zoom(target=2)
+            except Exception:
+                pass
+            return False
         return super().eventFilter(obj, event)
 
     def zoom_in_timeline(self):
@@ -2230,6 +2350,13 @@ Average Score: {avg_score:.3f}
         ax.set_xlim(new_xlim)
         self.timeline_canvas.draw()
         self.timeline_canvas.flush_events()  # Force immediate update
+        # Keep second timeline xlim in sync if visible
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+            try:
+                self.timeline_canvas2.ax.set_xlim(new_xlim)
+                self.timeline_canvas2.draw()
+            except Exception:
+                pass
         
     def zoom_out_timeline(self):
         # Zoom out on the x-axis by a factor of 2, centered on current frame
@@ -2242,6 +2369,13 @@ Average Score: {avg_score:.3f}
         ax.set_xlim(new_xlim)
         self.timeline_canvas.draw()
         self.timeline_canvas.flush_events()  # Force immediate update
+        # Keep second timeline xlim in sync if visible
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+            try:
+                self.timeline_canvas2.ax.set_xlim(new_xlim)
+                self.timeline_canvas2.draw()
+            except Exception:
+                pass
 
     def reset_zoom_timeline(self):
         # Reset the x and y axis to initial state (full view)
@@ -2253,6 +2387,15 @@ Average Score: {avg_score:.3f}
             ax.set_ylim(0, 1.2)
         self.timeline_canvas.draw()
         self.timeline_canvas.flush_events()  # Force immediate update
+        # Also reset the second timeline if present
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+            ax2 = self.timeline_canvas2.ax
+            ax2.set_xlim(0, max(getattr(self.timeline_canvas2, 'total_frames', 0), 1000))
+            if hasattr(self.timeline_canvas2, 'motion_energy') and self.timeline_canvas2.motion_energy is not None:
+                ax2.set_ylim(0, max(self.timeline_canvas2.motion_energy) * 1.2)
+            else:
+                ax2.set_ylim(0, 1.2)
+            self.timeline_canvas2.draw()
 
     def zoom_in_video(self, target=1):
         """Zoom in on the specified video (1 or 2)"""
