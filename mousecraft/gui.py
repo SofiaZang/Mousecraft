@@ -29,6 +29,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 class DraggableTimeline(FigureCanvas):
     """Custom matplotlib canvas with draggable timeline"""
     timeline_moved = pyqtSignal(int)
+    timeline_clicked = pyqtSignal()
     
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(10, 4.0))  # Increased height for better visibility
@@ -36,6 +37,11 @@ class DraggableTimeline(FigureCanvas):
         self.setParent(parent)
         
         self.ax = self.fig.add_subplot(111)
+        # Ensure bottom margin so x ticks aren't hidden by following widgets
+        try:
+            self.fig.subplots_adjust(bottom=0.2)
+        except Exception:
+            pass
         self.current_frame = 0
         self.total_frames = 0
         self.motion_energy = None
@@ -54,6 +60,11 @@ class DraggableTimeline(FigureCanvas):
         self.mpl_connect('motion_notify_event', self.on_motion)
         
     def on_press(self, event):
+        # Notify listeners that this timeline has been interacted with
+        try:
+            self.timeline_clicked.emit()
+        except Exception:
+            pass
         if event.inaxes != self.ax:
             return
         if event.button == 1:  # Left click
@@ -559,6 +570,11 @@ class MotionAnnotator(QWidget):
         self.timeline_canvas.setMinimumHeight(200)
         self.timeline_canvas.setMaximumHeight(500)
         self.timeline_canvas.timeline_moved.connect(self.timeline_frame_changed_primary)
+        def _focus_primary():
+            self.active_timeline_index = 1
+            if hasattr(self, 'annotate_primary_radio'):
+                self.annotate_primary_radio.setChecked(True)
+        self.timeline_canvas.timeline_clicked.connect(_focus_primary)
         # Second timeline (secondary input)
         self.timeline_canvas2 = DraggableTimeline()
         try:
@@ -569,6 +585,11 @@ class MotionAnnotator(QWidget):
         self.timeline_canvas2.setMinimumHeight(200)
         self.timeline_canvas2.setMaximumHeight(500)
         self.timeline_canvas2.timeline_moved.connect(self.timeline_frame_changed_secondary)
+        def _focus_secondary():
+            self.active_timeline_index = 2
+            if hasattr(self, 'annotate_secondary_radio'):
+                self.annotate_secondary_radio.setChecked(True)
+        self.timeline_canvas2.timeline_clicked.connect(_focus_secondary)
         # Add both to vertical splitter; hide second until used
         self.timeline_splitter.addWidget(self.timeline_canvas)
         self.timeline_splitter.addWidget(self.timeline_canvas2)
@@ -606,7 +627,26 @@ class MotionAnnotator(QWidget):
         self.add_second_input_btn.clicked.connect(self.load_second_input)
         timeline_controls.addWidget(self.load_input_btn)
         timeline_controls.addWidget(self.add_second_input_btn)
+        # Add explicit annotation target selectors
+        annotate_target_layout = QHBoxLayout()
+        from PyQt5.QtWidgets import QRadioButton
+        self.annotate_primary_radio = QRadioButton("Annotate input 1")
+        self.annotate_secondary_radio = QRadioButton("Annotate input 2")
+        self.annotate_primary_radio.setChecked(True)
+        self.annotate_secondary_radio.setEnabled(False)
+        def _set_active_primary():
+            if self.annotate_primary_radio.isChecked():
+                self.active_timeline_index = 1
+        def _set_active_secondary():
+            if self.annotate_secondary_radio.isChecked():
+                self.active_timeline_index = 2
+        self.annotate_primary_radio.toggled.connect(_set_active_primary)
+        self.annotate_secondary_radio.toggled.connect(_set_active_secondary)
+        annotate_target_layout.addWidget(self.annotate_primary_radio)
+        annotate_target_layout.addWidget(self.annotate_secondary_radio)
+        annotate_target_layout.addStretch(1)
         timeline_layout.addLayout(timeline_controls)
+        timeline_layout.addLayout(annotate_target_layout)
         timeline_group.setLayout(timeline_layout)
         onset_group = QGroupBox("Onset Navigation & Validation")
         onset_layout = QVBoxLayout()
@@ -972,6 +1012,9 @@ class MotionAnnotator(QWidget):
             self.timeline_splitter.setSizes([1, 1])
             # Keep both timelines aligned on x when zooming via main controls
             self.reset_zoom_timeline()
+            # Enable radio to select second input for annotation
+            if hasattr(self, 'annotate_secondary_radio'):
+                self.annotate_secondary_radio.setEnabled(True)
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to load second input: {str(e)}')
             import traceback
@@ -1241,7 +1284,19 @@ class MotionAnnotator(QWidget):
             if reply != QMessageBox.Yes:
                 return
         # Check for total overlap and prompt BEFORE adding, exclude itself
-        self.check_total_overlap_and_prompt(onset, offset_inclusive, exclude_onsets=onset)
+        if target_secondary:
+            # Use secondary store for total-overlap check
+            self.check_total_overlap_and_prompt_for(
+                onsets_list=self.onsets2,
+                offsets_map=self.timeline_canvas2.event_offsets,
+                onset_types=self.onset_types2,
+                validations=getattr(self.timeline_canvas2, 'onset_validations', {}),
+                new_onset=onset,
+                new_offset=offset_inclusive,
+                exclude_onsets=onset
+            )
+        else:
+            self.check_total_overlap_and_prompt(onset, offset_inclusive, exclude_onsets=onset)
         # Ajoute aux structures pour la timeline ciblée
         target_onsets.append(onset)
         target_types[onset] = event_type
@@ -1518,9 +1573,13 @@ class MotionAnnotator(QWidget):
             self.loop_btn.setEnabled(frame in getattr(self, 'onsets', []))
 
     def timeline_frame_changed_primary(self, frame):
+        # Set primary as active when interacting with first timeline
+        self.active_timeline_index = 1
         self._sync_frame_all(frame)
 
     def timeline_frame_changed_secondary(self, frame):
+        # Set secondary as active when interacting with second timeline
+        self.active_timeline_index = 2
         self._sync_frame_all(frame)
 
     def update_frame_info(self):
@@ -2952,6 +3011,77 @@ Average Score: {avg_score:.3f}
                 created_files.append(metrics_path)
             except Exception:
                 pass
+        # If a second signal is present, export its annotations separately with _second_signal suffix
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible() and hasattr(self, 'onsets2') and self.onsets2 is not None:
+            # Build a minimal frame table for second signal
+            n_frames2 = len(getattr(self.timeline_canvas2, 'motion_energy', [])) if getattr(self.timeline_canvas2, 'motion_energy', None) is not None else (max(self.onsets2)+1 if self.onsets2 else 0)
+            try:
+                import pandas as pd
+                mf2_df = pd.DataFrame({'frame_idx': list(range(n_frames2))})
+                for col in ['active', 'twitch', 'complex']:
+                    mf2_df[col] = 0
+                mf2_df['status'] = [''] * n_frames2
+                mf2_df['score'] = [''] * n_frames2
+                # Fill binary columns based on onsets2/event_types2 and offsets (inclusive export)
+                for onset in self.onsets2:
+                    event_type2 = self.onset_types2.get(onset, '')
+                    off2 = self.timeline_canvas2.event_offsets.get(onset, onset)
+                    start2 = min(onset, off2)
+                    end2 = max(onset, off2)
+                    export_off2 = end2 + 1 if end2 > start2 else (start2 + 1)
+                    if event_type2 in ['active', 'twitch', 'complex']:
+                        mf2_df.loc[start2:end2, event_type2] = 1
+                    mf2_df.at[onset, 'status'] = 'manually added'
+                    mf2_df.at[onset, 'score'] = 0
+                # Write MF for second signal
+                mf2_path = os.path.join(output_dir, f"validation_MF_input_1{suffix}.xlsx")
+                try:
+                    mf2_df.to_excel(mf2_path, index=False)
+                    created_files.append(mf2_path)
+                except Exception:
+                    mf2_path_csv = os.path.join(output_dir, f"validation_MF_input_1{suffix}.csv")
+                    try:
+                        mf2_df.to_csv(mf2_path_csv, index=False)
+                        created_files.append(mf2_path_csv)
+                    except Exception:
+                        pass
+                # HF export for second signal
+                export_events2 = []
+                for onset in self.onsets2:
+                    off2 = self.timeline_canvas2.event_offsets.get(onset, onset)
+                    event_type2 = self.onset_types2.get(onset, '')
+                    # Always manual for second when motion-only
+                    status2 = 'manually added'
+                    score2 = 0
+                    s2 = min(onset, off2)
+                    e2 = max(onset, off2)
+                    export_off2 = e2 + 1 if e2 > s2 else (s2 + 1)
+                    export_events2.append([onset, export_off2, event_type2, status2, score2])
+                hf2_df = pd.DataFrame(export_events2, columns=pd.Index(['onset', 'offset', 'event_type', 'status', 'score']))
+                hf2_path = os.path.join(output_dir, f"validation_HF_input_1{suffix}.xlsx")
+                try:
+                    hf2_df.to_excel(hf2_path, index=False)
+                    created_files.append(hf2_path)
+                except Exception:
+                    hf2_path_csv = os.path.join(output_dir, f"validation_HF_input_1{suffix}.csv")
+                    try:
+                        hf2_df.to_csv(hf2_path_csv, index=False)
+                        created_files.append(hf2_path_csv)
+                    except Exception:
+                        pass
+                # NPYs for second signal
+                try:
+                    import numpy as np
+                    if len(mf2_df) > 0:
+                        np.save(os.path.splitext(mf2_path)[0] + '.npy' if 'mf2_path' in locals() else os.path.join(output_dir, f"validation_MF_second_signal{suffix}.npy"), mf2_df.to_numpy())
+                        created_files.append((os.path.splitext(mf2_path)[0] + '.npy') if 'mf2_path' in locals() else os.path.join(output_dir, f"validation_MF_second_signal{suffix}.npy"))
+                    if len(hf2_df) > 0:
+                        np.save(os.path.splitext(hf2_path)[0] + '.npy' if 'hf2_path' in locals() else os.path.join(output_dir, f"validation_HF_second_signal{suffix}.npy"), hf2_df.to_numpy())
+                        created_files.append((os.path.splitext(hf2_path)[0] + '.npy') if 'hf2_path' in locals() else os.path.join(output_dir, f"validation_HF_second_signal{suffix}.npy"))
+                except Exception:
+                    pass
+            except Exception:
+                pass
         # Build message from actually created files
         msg = f"Exported to: {output_dir}\n\n" + "\n".join(f"- {os.path.basename(p)}" for p in created_files)
         QMessageBox.information(self, "Export", msg)
@@ -3372,6 +3502,31 @@ Average Score: {avg_score:.3f}
                         self.goto_onset(next_idx)
                         break
                     next_idx += 1
+
+    def check_total_overlap_and_prompt_for(self, onsets_list, offsets_map, onset_types, validations, new_onset, new_offset, exclude_onsets=None):
+        """Variant of total-overlap check for arbitrary stores (used for second signal)."""
+        if exclude_onsets is None:
+            exclude_onsets = []
+        elif not isinstance(exclude_onsets, (list, tuple, set)):
+            exclude_onsets = [exclude_onsets]
+        overlapped = []
+        for other_onset in onsets_list:
+            if other_onset in exclude_onsets:
+                continue
+            other_offset = offsets_map.get(other_onset, other_onset)
+            if new_onset < other_onset and new_offset > other_offset:
+                overlapped.append((other_onset, other_offset, onset_types.get(other_onset, 'unknown')))
+        for onset, offset, event_type in overlapped:
+            reply = QMessageBox.question(
+                self,
+                "Total Overlap Detected",
+                f"The event {event_type} ({onset}-{offset}) is totally overlapped by your new/edited event.\nDo you want to reject it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                validations[onset] = 'rejected'
+                # No redraw of primary timeline here
 
     def show_change_type_dropdown(self):
         # Remove any existing dropdown
