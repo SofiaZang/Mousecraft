@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QLabel, QSlider, QFileDialog, QSpinBox, QDoubleSpinBox, 
     QGroupBox, QGridLayout, QTextEdit, QComboBox, QCheckBox,
     QMessageBox, QProgressBar, QSplitter, QLineEdit, QSizePolicy,
-    QDialog, QFrame, QSpacerItem, QColorDialog
+    QDialog, QFrame, QSpacerItem
 )
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon, QFont, QFontDatabase, QMovie
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
@@ -91,13 +91,6 @@ class DraggableTimeline(FigureCanvas):
         self.onset_types = onset_types or {}
         self.event_offsets = event_offsets or {}
         self.event_status = event_status or {}
-        # Ensure colors map exists
-        if not hasattr(self, 'event_type_colors') or self.event_type_colors is None:
-            self.event_type_colors = {
-                'twitch': 'purple',
-                'active': 'yellow',
-                'complex': 'cyan',
-            }
 
         self.ax.clear()
         self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='blue', linewidth=1)  # Use lighter blue for motion energy
@@ -108,12 +101,11 @@ class DraggableTimeline(FigureCanvas):
             offset = self.event_offsets.get(onset, onset)
             status = self.event_status.get(onset, '')
             alpha = 1.0 if status == 'accepted' else 0.4
-            # Pick color from mapping with graceful fallback
-            color_key = str(onset_type).lower()
-            color_value = self.event_type_colors.get(color_key, self.event_type_colors.get(onset_type, None))
-            if color_value is None:
-                color_value = '#888888'
-            self.ax.axvspan(onset, offset, color=color_value, alpha=alpha)
+            
+            if onset_type == 'twitch':
+                self.ax.axvspan(onset, offset, color='purple', alpha=alpha)
+            elif onset_type == 'active':
+                self.ax.axvspan(onset, offset, color='yellow', alpha=alpha)
 
         # Add validation markers as bullet points on top
         for onset in self.onsets:
@@ -163,20 +155,7 @@ class DraggableTimeline(FigureCanvas):
         self.update_timeline()
         
     def plot_motion_energy_preserve_view(self, *args, **kwargs):
-        try:
-            xlim = self.ax.get_xlim()
-            ylim = self.ax.get_ylim()
-        except Exception:
-            xlim = None
-            ylim = None
         self.plot_motion_energy(*args, **kwargs)
-        if xlim is not None and ylim is not None:
-            try:
-                self.ax.set_xlim(xlim)
-                self.ax.set_ylim(ylim)
-            except Exception:
-                pass
-        self.update_timeline()
         self.draw()
 
     def set_onset_validation(self, onset, validation):
@@ -304,14 +283,6 @@ class MotionAnnotator(QWidget):
         self._mouse_milestones = set()
         self._mouse_milestones_shown = set()
 
-        # Dynamic event types and colors
-        self.available_event_types = ["twitch", "active", "complex"]
-        self.event_type_colors = {
-            "twitch": "purple",
-            "active": "yellow",
-            "complex": "cyan",
-        }
-
         self.init_ui()
         self.setup_timer()
         self.unsaved_changes = False  # Track unsaved changes
@@ -344,70 +315,38 @@ class MotionAnnotator(QWidget):
         self.video_folder_label.setAlignment(Qt.AlignCenter)
         left_panel.addWidget(self.video_folder_label)
 
-        # Video display area: stack for up to 2 cameras, wrapped in a fixed-height container when splitting
-        # Independent zoom factors per camera (do not affect layout size)
-        self.video_zoom_factor_cam1 = 1.0
-        self.video_zoom_factor_cam2 = 1.0
-        self.video_container = QWidget()
-        self.video_stack_layout = QVBoxLayout()
-        self.video_stack_layout.setContentsMargins(0, 0, 0, 0)
-        self.video_stack_layout.setSpacing(2)
-        # Camera 1
+        # Video display - smaller size with zoom capability
         self.video_label = QLabel("Load a video to start")
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setMinimumSize(600, 450)
-        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setMinimumSize(600, 450)  # Made smaller
+        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Make it expand
         self.video_label.setStyleSheet("border: 2px solid gray;")
+        self.video_zoom_factor = 1.0  # Track zoom level
         self.video_label.installEventFilter(self)
-        self.video_stack_layout.addWidget(self.video_label)
-        # Camera 2 (initially hidden)
-        self.second_video_label = QLabel("")
-        self.second_video_label.setAlignment(Qt.AlignCenter)
-        self.second_video_label.setMinimumSize(0, 0)
-        self.second_video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.second_video_label.setStyleSheet("border: 2px solid gray;")
-        self.second_video_label.installEventFilter(self)
-        self.second_video_label.hide()
-        self.video_stack_layout.addWidget(self.second_video_label)
-        # Default: single camera uses full space; second is collapsed
-        self.video_stack_layout.setStretch(0, 1)
-        self.video_stack_layout.setStretch(1, 0)
-        self.video_container.setLayout(self.video_stack_layout)
-        self.video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.video_container.setMinimumHeight(450)
-        left_panel.addWidget(self.video_container, 1)
+        left_panel.addWidget(self.video_label)
 
         # Video controls
         video_controls = QGroupBox("Video Controls")
         video_layout = QGridLayout()
         self.load_video_btn = QPushButton("Load Video")
         self.load_video_btn.clicked.connect(self.load_video)
-        video_layout.addWidget(self.load_video_btn, 0, 0, 1, 2)
-        # Add a camera button
-        self.add_camera_btn = QPushButton("Add a camera")
-        self.add_camera_btn.clicked.connect(self.add_camera)
-        video_layout.addWidget(self.add_camera_btn, 0, 2, 1, 2)
+        video_layout.addWidget(self.load_video_btn, 0, 0, 1, 4)  # Span all 4 columns
 
         # Création des boutons de contrôle vidéo
         self.play_btn = QPushButton("Play ▶️")
-        self.loop_btn = QPushButton("Loop 🔁")
         self.pause_btn = QPushButton("Pause ⏸")
         self.stop_btn = QPushButton("Stop ⏹")
         # Forcer activation/visibilité
         self.play_btn.setEnabled(True)
-        self.loop_btn.setEnabled(False)  # Enabled only when current frame is an onset
         self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
         self.play_btn.setVisible(True)
-        self.loop_btn.setVisible(True)
         self.pause_btn.setVisible(True)
         self.stop_btn.setVisible(True)
         self.play_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.loop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.pause_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.stop_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.play_btn.setMinimumHeight(34)
-        self.loop_btn.setMinimumHeight(34)
         self.pause_btn.setMinimumHeight(34)
         self.stop_btn.setMinimumHeight(34)
         # Diagnostic widgets recouvrants
@@ -417,7 +356,6 @@ class MotionAnnotator(QWidget):
 
         # Connexions
         self.play_btn.clicked.connect(self.play)
-        self.loop_btn.clicked.connect(self.start_loop_playback)
         self.pause_btn.clicked.connect(lambda: self.pause_btn.setFocus())
         self.pause_btn.pressed.connect(self.pause)
         self.stop_btn.clicked.connect(self.stop)
@@ -425,14 +363,10 @@ class MotionAnnotator(QWidget):
         # Layout horizontal pour les boutons
         play_pause_layout = QHBoxLayout()
         play_pause_layout.addWidget(self.play_btn)
-        play_pause_layout.addWidget(self.loop_btn)
         play_pause_layout.addWidget(self.pause_btn)
         self.pause_btn.raise_()  # monte le bouton tout en haut
         play_pause_layout.addWidget(self.stop_btn)
         video_layout.addLayout(play_pause_layout, 1, 0, 1, 4)
-
-        # Initialize loop button enabled state based on initial frame
-        self.loop_btn.setEnabled(False)
 
         # FPS controls on third row
         self.fps_lineedit = QLineEdit()
@@ -484,13 +418,9 @@ class MotionAnnotator(QWidget):
         event_type_layout.addWidget(QLabel("Event Type:"))
         self.event_type_combo = QComboBox()
         self.event_type_combo.addItem("Select type…")  # Placeholder
-        self.event_type_combo.addItems(self.available_event_types)
+        self.event_type_combo.addItems(["twitch", "active", "complex"])
         self.event_type_combo.setCurrentIndex(0)
         event_type_layout.addWidget(self.event_type_combo)
-        # Add a button to add new event types
-        self.add_type_btn = QPushButton("Add a type")
-        self.add_type_btn.clicked.connect(self.open_add_type_dialog)
-        event_type_layout.addWidget(self.add_type_btn)
         manual_layout.addLayout(event_type_layout)
         onset_offset_layout = QGridLayout()
         self.onset_spinbox = QSpinBox()
@@ -535,11 +465,6 @@ class MotionAnnotator(QWidget):
         timeline_group = QGroupBox("Motion Energy Timeline")
         timeline_layout = QVBoxLayout()
         self.timeline_canvas = DraggableTimeline()
-        # Sync event type colors mapping to timeline canvas
-        try:
-            self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
-        except Exception:
-            pass
         self.timeline_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Allow more vertical expansion
         self.timeline_canvas.setMinimumHeight(350)  # Increased minimum height
         self.timeline_canvas.setMaximumHeight(500)  # Increased maximum height
@@ -560,12 +485,12 @@ class MotionAnnotator(QWidget):
         timeline_layout.addLayout(zoom_btn_layout)
         
         timeline_controls = QHBoxLayout()
-        self.load_input_btn = QPushButton("Load an input")
-        self.load_input_btn.clicked.connect(self.load_input)
-        self.add_second_input_btn = QPushButton("Add a second input")
-        self.add_second_input_btn.clicked.connect(self.load_input)
-        timeline_controls.addWidget(self.load_input_btn)
-        timeline_controls.addWidget(self.add_second_input_btn)
+        self.load_me_btn = QPushButton("Load Motion Energy")
+        self.load_me_btn.clicked.connect(self.load_motion_energy)
+        self.load_class_btn = QPushButton("Load Classifications")
+        self.load_class_btn.clicked.connect(self.load_classifications)
+        timeline_controls.addWidget(self.load_me_btn)
+        timeline_controls.addWidget(self.load_class_btn)
         timeline_layout.addLayout(timeline_controls)
         timeline_group.setLayout(timeline_layout)
         onset_group = QGroupBox("Onset Navigation & Validation")
@@ -574,7 +499,7 @@ class MotionAnnotator(QWidget):
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("Event type"))
         self.onset_filter_combo = QComboBox()
-        self.onset_filter_combo.addItems(["All"] + [t.capitalize() for t in self.available_event_types])
+        self.onset_filter_combo.addItems(["All", "Active", "Twitch"])
         self.onset_filter_combo.currentIndexChanged.connect(self.update_onset_filter)
         filter_layout.addWidget(self.onset_filter_combo)
         filter_layout.addWidget(QLabel("Event status"))
@@ -699,10 +624,6 @@ class MotionAnnotator(QWidget):
     def setup_timer(self):
         self.timer = QTimer()
         self.timer.timeout.connect(self.next_frame)
-        # Loop playback state
-        self.is_looping_event = False
-        self.loop_start_frame = None
-        self.loop_end_frame = None
         
     def load_video(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Video', '', 'Videos (*.avi *.mp4 *.mov *.mkv *.tiff *.tif)')
@@ -736,29 +657,6 @@ class MotionAnnotator(QWidget):
             grandparent_folder = os.path.basename(os.path.dirname(os.path.dirname(fname)))
             self.video_folder_label.setText(f"Video folder : {grandparent_folder} / {parent_folder}")
             self.maybe_start_auto_save()
-
-    def add_camera(self):
-        fname, _ = QFileDialog.getOpenFileName(self, 'Open Second Video', '', 'Videos (*.avi *.mp4 *.mov *.mkv *.tiff *.tif)')
-        if not fname:
-            return
-        self.second_video_path = fname
-        self.cap2 = cv2.VideoCapture(self.second_video_path)
-        if not self.cap2.isOpened():
-            QMessageBox.critical(self, "Error", "Could not open second video file")
-            self.cap2 = None
-            return
-        # Show second camera label and set equal share between cameras without changing overall panel layout
-        self.second_video_label.show()
-        # Allow the first camera to shrink to half by removing its large minimum size
-        try:
-            self.video_label.setMinimumSize(0, 0)
-            self.second_video_label.setMinimumSize(0, 0)
-        except Exception:
-            pass
-        self.video_stack_layout.setStretch(0, 1)
-        self.video_stack_layout.setStretch(1, 1)
-        # Trigger a repaint at current frame for both cameras
-        self.show_frame(self.current_frame)
         
     def load_motion_energy(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Load Motion Energy', '', 'CSV/Excel (*.csv *.xlsx *.npy)')
@@ -782,10 +680,7 @@ class MotionAnnotator(QWidget):
                 
             # Pad to divisible by 5 and average
             self.prepare_motion_energy()
-            # Reset zoom when loading motion energy directly
             self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
-            self.reset_zoom_timeline()
-            self.reset_video_zoom()
             self.maybe_start_auto_save()
             
     def prepare_motion_energy(self):
@@ -833,9 +728,6 @@ class MotionAnnotator(QWidget):
                     else:
                         QMessageBox.warning(self, "Warning", "File format not recognized. Please provide a valid classification file.")
                 self.undo_btn.setEnabled(True)
-                # Reset zoom when loading classifications directly
-                self.reset_zoom_timeline()
-                self.reset_video_zoom()
                 self.maybe_start_auto_save()
                 # Reset mouse milestone state
                 self._mouse_half_shown = False
@@ -845,68 +737,6 @@ class MotionAnnotator(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to load classifications: {str(e)}")
             import traceback
             traceback.print_exc()
-
-    def load_input(self):
-        """Unified loader for motion energy or classifications (.json/.csv/.xlsx/.npy). If a motion energy is already loaded, this can be used to add a second input as well."""
-        fname, _ = QFileDialog.getOpenFileName(self, 'Load an input', '', 'All Supported (*.json *.csv *.xlsx *.npy);;JSON (*.json);;CSV (*.csv);;Excel (*.xlsx);;NumPy (*.npy)')
-        if not fname:
-            return
-        try:
-            lower = fname.lower()
-            if lower.endswith('.npy'):
-                # Treat as motion energy
-                self.motion_energy = np.load(fname)
-                self.prepare_motion_energy()
-                # Reset timeline zoom on input load
-                self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
-                # Reset timeline axes to full range
-                self.reset_zoom_timeline()
-            elif lower.endswith('.json'):
-                # Classifications JSON
-                self.load_json_classifications(fname)
-            elif lower.endswith('.csv') or lower.endswith('.xlsx'):
-                # Try as classifications first; if not recognized, fall back to motion energy (first numeric column)
-                try:
-                    self.load_classifications_from_path(fname)
-                except Exception:
-                    # fallback: motion energy
-                    if lower.endswith('.csv'):
-                        df = pd.read_csv(fname)
-                    else:
-                        df = pd.read_excel(fname)
-                    self.motion_energy = df.select_dtypes(include=[np.number]).iloc[:, 0].values
-                    self.prepare_motion_energy()
-                    self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
-                    self.reset_zoom_timeline()
-            else:
-                QMessageBox.warning(self, 'Unsupported file', 'Please select a .json, .csv, .xlsx, or .npy file.')
-                return
-            # Reset video zoom on input load (if videos are present)
-            self.reset_video_zoom()
-            self.maybe_start_auto_save()
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Failed to load input: {str(e)}')
-            import traceback
-            traceback.print_exc()
-
-    def load_classifications_from_path(self, fname):
-        """Helper to load classifications from a known good CSV/XLSX path."""
-        import os
-        parent = os.path.dirname(fname)
-        grandparent = os.path.dirname(parent)
-        arriere_grandparent = os.path.dirname(grandparent)
-        grandparent_folder = os.path.basename(grandparent)
-        arriere_grandparent_folder = os.path.basename(arriere_grandparent)
-        self.motion_energy_folder_label.setText(f"Classification folder : {arriere_grandparent_folder} / {grandparent_folder}")
-        loaded_df = pd.read_csv(fname) if fname.endswith('.csv') else pd.read_excel(fname)
-        self.input_classification_df = loaded_df.copy()
-        cols = set(loaded_df.columns)
-        if {'active', 'twitch'}.issubset(cols):
-            self.load_framewise_table(fname)
-        elif {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols):
-            self.load_excel_classifications(fname)
-        else:
-            raise ValueError('Unrecognized classification table schema')
         
     def load_json_classifications(self, fname):
         """Load classifications from JSON format"""
@@ -931,7 +761,7 @@ class MotionAnnotator(QWidget):
         self.current_onset_idx = 0
         
         # Update timeline
-        self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+        self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
         
         # Go to first onset
         if self.onsets:
@@ -1060,7 +890,7 @@ class MotionAnnotator(QWidget):
                 self.curated_events[event_type].append([onset, 1])  # 1 indicates detected by algorithm
                 
             # Update timeline
-            self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+            self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
             
             # Go to first onset
             if self.onsets:
@@ -1134,13 +964,10 @@ class MotionAnnotator(QWidget):
             if (onset <= other_offset and offset_inclusive >= other_onset) and not (onset < other_onset and offset_inclusive > other_offset):
                 overlapping.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
         if overlapping:
-            msg = "This event overlaps with existing events:\n\n"
+            msg = "Warning: This event partially overlaps with existing events:\n"
             for o, off, typ in overlapping:
                 msg += f"- {typ} ({o}-{off})\n"
-            msg += "\nDo you want to add it anyway?"
-            reply = QMessageBox.question(self, "Overlap Detected", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply != QMessageBox.Yes:
-                return
+            QMessageBox.warning(self, "Partial Overlap", msg)
         # Check for total overlap and prompt BEFORE adding, exclude itself
         self.check_total_overlap_and_prompt(onset, offset_inclusive, exclude_onsets=onset)
         # Ajoute aux structures principales (une seule fois)
@@ -1188,8 +1015,6 @@ class MotionAnnotator(QWidget):
         QMessageBox.information(self, "Success", f"Added {event_type} event from frame {onset} to {offset_exclusive}")
         # After successful add, reset dropdown to placeholder
         self.event_type_combo.setCurrentIndex(0)
-        # Check for mouse milestones after adding manual event
-        self.check_mouse_milestones()
         self.maybe_start_auto_save()
         self.maybe_stop_auto_save()
         
@@ -1226,8 +1051,6 @@ class MotionAnnotator(QWidget):
             # Only play if FPS is set
             if hasattr(self, 'fps') and self.fps >= 1:
                 interval = int(1000 / self.fps)
-                # Exit loop mode when using normal play
-                self.is_looping_event = False
                 self.timer.start(interval)
             else:
                 QMessageBox.warning(self, "Warning", "Please enter a valid FPS before playing.")
@@ -1235,16 +1058,12 @@ class MotionAnnotator(QWidget):
     def pause(self):
         if self.timer.isActive():
             self.timer.stop()
-        # Exit loop mode on pause
-        self.is_looping_event = False
         
     def stop(self):
         self.timer.stop()
         self.current_frame = 0
         self.frame_slider.setValue(0)
         self.show_frame(0)
-        # Exit loop mode on stop
-        self.is_looping_event = False
         
     def handle_fps_change(self):
         text = self.fps_lineedit.text()
@@ -1255,40 +1074,8 @@ class MotionAnnotator(QWidget):
                 interval = int(1000 / self.fps)
                 self.timer.start(interval)
         # If invalid, do not update self.fps
-        # No special handling needed for loop mode; it uses the same timer
-
-    def start_loop_playback(self):
-        # Only start if current frame is exactly an onset
-        if self.current_frame not in getattr(self, 'onsets', []):
-            return
-        # Determine corresponding offset
-        onset = self.current_frame
-        offset = self.timeline_canvas.event_offsets.get(onset, onset)
-        # Define loop bounds with ±10 frames
-        start = max(0, onset - 10)
-        end = min(self.total_frames - 1, (offset + 10))
-        self.loop_start_frame = start
-        self.loop_end_frame = end
-        self.is_looping_event = True
-        # Jump to start immediately
-        self.current_frame = start
-        self.frame_slider.setValue(self.current_frame)
-        self.show_frame(self.current_frame)
-        # Start timer with chosen FPS
-        if hasattr(self, 'fps') and self.fps >= 1:
-            interval = int(1000 / self.fps)
-            self.timer.start(interval)
-        else:
-            QMessageBox.warning(self, "Warning", "Please enter a valid FPS before playing.")
             
     def next_frame(self):
-        if self.is_looping_event and self.loop_end_frame is not None:
-            # If we've reached the loop end, jump back to loop start
-            if self.current_frame >= self.loop_end_frame:
-                self.current_frame = max(0, self.loop_start_frame)
-                self.frame_slider.setValue(self.current_frame)
-                self.show_frame(self.current_frame)
-                return
         if self.current_frame < self.total_frames - 1:
             self.current_frame += 1
             self.frame_slider.setValue(self.current_frame)
@@ -1308,69 +1095,25 @@ class MotionAnnotator(QWidget):
         # Check if current frame is an onset (for status bar update)
         onset_type = self.onset_types.get(frame_num, None)
         
-        # Optimize video processing and apply zoom by cropping, not resizing the panel
+        # Optimize video processing for better performance
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        
+        # Use faster scaling for better performance with zoom support
+        pixmap = QPixmap.fromImage(q_img)
         label_size = self.video_label.size()
         if label_size.width() > 0 and label_size.height() > 0:
-            if self.video_zoom_factor_cam1 > 1.0:
-                crop_w = max(1, int(w / self.video_zoom_factor_cam1))
-                crop_h = max(1, int(h / self.video_zoom_factor_cam1))
-                cx, cy = w // 2, h // 2
-                x0 = max(0, cx - crop_w // 2)
-                y0 = max(0, cy - crop_h // 2)
-                x1 = min(w, x0 + crop_w)
-                y1 = min(h, y0 + crop_h)
-                cropped = frame[y0:y1, x0:x1]
-            else:
-                cropped = frame
-            cropped = np.ascontiguousarray(cropped)
-            ch2 = cropped.shape[2]
-            bytes_per_line2 = ch2 * cropped.shape[1]
-            q_img = QImage(cropped.tobytes(), cropped.shape[1], cropped.shape[0], bytes_per_line2, QImage.Format_RGB888)
-            pixmap = QPixmap.fromImage(q_img)
-            scaled_pixmap = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            # Apply zoom factor
+            zoomed_width = int(label_size.width() * self.video_zoom_factor)
+            zoomed_height = int(label_size.height() * self.video_zoom_factor)
+            zoomed_size = QSize(zoomed_width, zoomed_height)
+            scaled_pixmap = pixmap.scaled(zoomed_size, Qt.KeepAspectRatio, Qt.FastTransformation)
             self.video_label.setPixmap(scaled_pixmap)
-
-        # Render second camera if available
-        if hasattr(self, 'cap2') and self.cap2 is not None and self.second_video_label.isVisible():
-            try:
-                self.cap2.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-                ret2, frame2 = self.cap2.read()
-                if ret2:
-                    frame2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
-                    h2, w2, ch2 = frame2.shape
-                    label2_size = self.second_video_label.size()
-                    if label2_size.width() > 0 and label2_size.height() > 0:
-                        if self.video_zoom_factor_cam2 > 1.0:
-                            crop_w2 = max(1, int(w2 / self.video_zoom_factor_cam2))
-                            crop_h2 = max(1, int(h2 / self.video_zoom_factor_cam2))
-                            cx2, cy2 = w2 // 2, h2 // 2
-                            x0_2 = max(0, cx2 - crop_w2 // 2)
-                            y0_2 = max(0, cy2 - crop_h2 // 2)
-                            x1_2 = min(w2, x0_2 + crop_w2)
-                            y1_2 = min(h2, y0_2 + crop_h2)
-                            cropped2 = frame2[y0_2:y1_2, x0_2:x1_2]
-                        else:
-                            cropped2 = frame2
-                        cropped2 = np.ascontiguousarray(cropped2)
-                        ch2b = cropped2.shape[2]
-                        bytes_per_line2b = ch2b * cropped2.shape[1]
-                        q_img2 = QImage(cropped2.tobytes(), cropped2.shape[1], cropped2.shape[0], bytes_per_line2b, QImage.Format_RGB888)
-                        pixmap2 = QPixmap.fromImage(q_img2)
-                        scaled_pixmap2 = pixmap2.scaled(label2_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                        self.second_video_label.setPixmap(scaled_pixmap2)
-            except Exception:
-                pass
         
         self.update_frame_info()
         self.update_onset_status()
-        # Enable loop button only when at an onset frame
-        try:
-            if hasattr(self, 'loop_btn'):
-                self.loop_btn.setEnabled(frame_num in self.onsets)
-        except Exception:
-            pass
         self.setFocus()
         
     def slider_moved(self, value):
@@ -1379,9 +1122,6 @@ class MotionAnnotator(QWidget):
         self.timeline_canvas.current_frame = value
         self.timeline_canvas.update_timeline()
         self.update_onset_info()  # Ne change pas l'onset courant
-        # Toggle loop button availability
-        if hasattr(self, 'loop_btn'):
-            self.loop_btn.setEnabled(value in getattr(self, 'onsets', []))
 
     def timeline_frame_changed(self, frame):
         self.current_frame = frame
@@ -1389,23 +1129,13 @@ class MotionAnnotator(QWidget):
         self.show_frame(frame)
         self.timeline_canvas.current_frame = frame
         self.timeline_canvas.update_timeline()
-        # Only update spinbox if it's not currently being edited
-        if not self.frame_spinbox.hasFocus():
-            self.frame_spinbox.blockSignals(True)
-            self.frame_spinbox.setValue(frame)
-            self.frame_spinbox.blockSignals(False)
         self.update_onset_info()  # Ne change pas l'onset courant
-        # Toggle loop button availability
-        if hasattr(self, 'loop_btn'):
-            self.loop_btn.setEnabled(frame in getattr(self, 'onsets', []))
 
     def update_frame_info(self):
         # Update spinbox and total frames label
-        # Only update spinbox if it's not currently being edited
-        if not self.frame_spinbox.hasFocus():
-            self.frame_spinbox.blockSignals(True)
-            self.frame_spinbox.setValue(self.current_frame)
-            self.frame_spinbox.blockSignals(False)
+        self.frame_spinbox.blockSignals(True)
+        self.frame_spinbox.setValue(self.current_frame)
+        self.frame_spinbox.blockSignals(False)
         self.frame_spinbox.setMaximum(max(0, self.total_frames - 1))
         self.total_frames_label.setText(str(self.total_frames))
         
@@ -1455,15 +1185,7 @@ class MotionAnnotator(QWidget):
             self.show_frame(onset_frame)
             self.timeline_canvas.current_frame = onset_frame
             self.timeline_canvas.update_timeline()
-            # Only update spinbox if it's not currently being edited
-            if not self.frame_spinbox.hasFocus():
-                self.frame_spinbox.blockSignals(True)
-                self.frame_spinbox.setValue(onset_frame)
-                self.frame_spinbox.blockSignals(False)
             self.update_onset_info()
-            # Toggle loop button availability
-            if hasattr(self, 'loop_btn'):
-                self.loop_btn.setEnabled(onset_frame in getattr(self, 'onsets', []))
             
     def prev_onset(self):
         if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
@@ -1651,7 +1373,7 @@ class MotionAnnotator(QWidget):
                 self.setFocus()
                 return
         elif validation == 'edited':
-            self.performance_metrics['true_positives'] = int(self.performance_metrics.get('true_positives', 0)) + 1
+            self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
         elif validation == 'rejected':
             self.performance_metrics['false_positives'] = int(self.performance_metrics.get('false_positives', 0)) + 1
             # No navigation here; let the final next_onset() at the end handle it
@@ -1754,7 +1476,7 @@ class MotionAnnotator(QWidget):
                 self.update_onset_filter()
                 self.update_onset_info()
                 self.update_performance_display()
-                self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+                self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
                 # Aller à l'onset suivant
                 if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
                     if self.current_onset_idx < len(self.filtered_onsets) - 1:
@@ -1812,7 +1534,7 @@ class MotionAnnotator(QWidget):
             self.current_onset_idx = self.filtered_onsets.index(new_onset)
         else:
             self.current_onset_idx = self.onsets.index(new_onset)
-        self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+        self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
         self.update_onset_info()
         self.update_performance_display()
         # Aller à l'onset suivant après édition
@@ -1848,7 +1570,8 @@ class MotionAnnotator(QWidget):
         else:
             avg_score = 0
         display_text = f"""
-Average Score: {avg_score:.3f}
+Performance Score:
+- Average Score: {avg_score:.3f}
 (accepted=1, rejected=-1, edited=0.5, pending=0, manually added=0)
         """
         self.metrics_text.setText(display_text.strip())
@@ -1865,15 +1588,8 @@ Average Score: {avg_score:.3f}
         overlaps = self.check_for_overlaps()
         if overlaps:
             overlap_str = "\n".join([f"{a1}-{b1} overlaps {a2}-{b2}" for a1, b1, a2, b2 in overlaps])
-            reply = QMessageBox.question(
-                self,
-                "Overlapping Events",
-                f"The following events overlap:\n\n{overlap_str}\n\nDo you want to save/export anyway?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
+            QMessageBox.critical(self, "Error: Overlapping Events", f"Cannot save/export. The following events overlap:\n\n{overlap_str}\n\nPlease fix all overlaps before saving.")
+            return
         # Create a flat list of events with 5 columns each
         export_events = []
         for event_type, events in self.curated_events.items():
@@ -2160,7 +1876,7 @@ Average Score: {avg_score:.3f}
 
         self.onsets = sorted(set(self.onsets))
         self.current_onset_idx = 0
-        self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+        self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
         if self.onsets:
             self.goto_onset(0)
         self.undo_btn.setEnabled(True)
@@ -2201,21 +1917,11 @@ Average Score: {avg_score:.3f}
         # Enable zooming on the video with the trackpad or mouse wheel
         if event.type() == event.MouseButtonPress:
             print("Mouse click event on:", obj)
-        if (obj == self.video_label or obj == self.second_video_label) and event.type() == event.Wheel:
-            # Zoom only the targeted camera; do not alter layout sizes
-            if obj == self.second_video_label:
-                if event.angleDelta().y() > 0:
-                    self.video_zoom_factor_cam2 = min(self.video_zoom_factor_cam2 * 1.2, 3.0)
-                else:
-                    self.video_zoom_factor_cam2 = max(self.video_zoom_factor_cam2 / 1.2, 0.3)
+        if obj == self.video_label and event.type() == event.Wheel:
+            if event.angleDelta().y() > 0:
+                self.zoom_in_video()
             else:
-                if event.angleDelta().y() > 0:
-                    self.video_zoom_factor_cam1 = min(self.video_zoom_factor_cam1 * 1.2, 3.0)
-                else:
-                    self.video_zoom_factor_cam1 = max(self.video_zoom_factor_cam1 / 1.2, 0.3)
-            # Redraw current frame without affecting layout
-            if self.cap is not None:
-                self.show_frame(self.current_frame)
+                self.zoom_out_video()
             return True
         return super().eventFilter(obj, event)
 
@@ -2254,33 +1960,21 @@ Average Score: {avg_score:.3f}
         self.timeline_canvas.draw()
         self.timeline_canvas.flush_events()  # Force immediate update
 
-    def zoom_in_video(self, target=1):
-        """Zoom in on the specified video (1 or 2)"""
-        if target == 2:
-            self.video_zoom_factor_cam2 = min(self.video_zoom_factor_cam2 * 1.2, 3.0)
-        else:
-            self.video_zoom_factor_cam1 = min(self.video_zoom_factor_cam1 * 1.2, 3.0)
+    def zoom_in_video(self):
+        """Zoom in on the video"""
+        self.video_zoom_factor = min(self.video_zoom_factor * 1.2, 3.0)  # Max 3x zoom
         if self.cap is not None:
             self.show_frame(self.current_frame)
             
-    def zoom_out_video(self, target=1):
-        """Zoom out on the specified video (1 or 2)"""
-        if target == 2:
-            self.video_zoom_factor_cam2 = max(self.video_zoom_factor_cam2 / 1.2, 0.3)
-        else:
-            self.video_zoom_factor_cam1 = max(self.video_zoom_factor_cam1 / 1.2, 0.3)
+    def zoom_out_video(self):
+        """Zoom out on the video"""
+        self.video_zoom_factor = max(self.video_zoom_factor / 1.2, 0.3)  # Min 0.3x zoom
         if self.cap is not None:
             self.show_frame(self.current_frame)
             
-    def reset_video_zoom(self, target=None):
+    def reset_video_zoom(self):
         """Reset video zoom to original size"""
-        if target == 2:
-            self.video_zoom_factor_cam2 = 1.0
-        elif target == 1:
-            self.video_zoom_factor_cam1 = 1.0
-        else:
-            self.video_zoom_factor_cam1 = 1.0
-            self.video_zoom_factor_cam2 = 1.0
+        self.video_zoom_factor = 1.0
         if self.cap is not None:
             self.show_frame(self.current_frame)
 
@@ -2315,9 +2009,6 @@ Average Score: {avg_score:.3f}
         else:
             self.onset_status_label.setText(f"Frame {self.current_frame}: No onset")
             self.onset_status_label.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
-        # Keep loop button in sync whenever status updates
-        if hasattr(self, 'loop_btn'):
-            self.loop_btn.setEnabled(self.current_frame in getattr(self, 'onsets', []))
 
     def goto_offset_for_validation(self, offset):
         self.current_frame = offset
@@ -2518,7 +2209,7 @@ Average Score: {avg_score:.3f}
         self.update_buttons_state(self.current_onset_for_menu)
 
     def redraw(self):
-        self.timeline_canvas.plot_motion_energy_preserve_view(
+        self.timeline_canvas.plot_motion_energy(
             self.motion_energy,
             self.onsets,
             self.onset_types,
@@ -2595,15 +2286,8 @@ Average Score: {avg_score:.3f}
         overlaps = self.check_for_overlaps()
         if overlaps:
             overlap_str = "\n".join([f"{a1}-{b1} overlaps {a2}-{b2}" for a1, b1, a2, b2 in overlaps])
-            reply = QMessageBox.question(
-                self,
-                "Overlapping Events",
-                f"The following events overlap:\n\n{overlap_str}\n\nDo you want to export anyway?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
+            QMessageBox.critical(self, "Error: Overlapping Events", f"Cannot save/export. The following events overlap:\n\n{overlap_str}\n\nPlease fix all overlaps before saving.")
+            return
         output_dir = os.path.join(dir_path, 'mousecraft_output')
         os.makedirs(output_dir, exist_ok=True)
         if not hasattr(self, 'input_classification_df') or self.input_classification_df is None:
@@ -2808,7 +2492,6 @@ Average Score: {avg_score:.3f}
 
     def show_firework_animation(self):
         """Show a firework GIF animation for 5 seconds with a congratulatory message below, with a solid dialog background."""
-        print("🎆 Firework animation triggered! 🎆")
         from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout
         from PyQt5.QtCore import Qt, QTimer
         from PyQt5.QtGui import QMovie
@@ -2822,10 +2505,7 @@ Average Score: {avg_score:.3f}
         # Firework GIF
         firework_label = QLabel(dialog)
         firework_label.setAlignment(Qt.AlignCenter)
-        firework_path = os.path.join(SCRIPT_DIR, "resources", "Fireworks.gif")
-        print(f"Firework path: {firework_path}")
-        print(f"Firework file exists: {os.path.exists(firework_path)}")
-        movie = QMovie(firework_path)
+        movie = QMovie("Fireworks.gif")
         firework_label.setMovie(movie)
         firework_label.setFixedSize(400, 400)
         movie.start()
@@ -2856,7 +2536,6 @@ Average Score: {avg_score:.3f}
 
     def show_mouse_animation(self):
         """Mouse moves from far left to center, stops, says something with a bubble for 3s, then continues to far right."""
-        print("🎉 Mouse animation triggered! 🎉")
         from PyQt5.QtWidgets import QDialog, QLabel
         from PyQt5.QtCore import Qt, QTimer, QSize
         from PyQt5.QtGui import QMovie, QPixmap
@@ -2864,12 +2543,8 @@ Average Score: {avg_score:.3f}
         import random
         dialog_width = 1000
         dialog_height = 300
-        mouse_path = os.path.join(SCRIPT_DIR, "resources", "mouse.png")
-        bubble_path = os.path.join(SCRIPT_DIR, "resources", "bulle de parole.wepb")  # Use the correct bubble file
-        print(f"Mouse path: {mouse_path}")
-        print(f"Mouse file exists: {os.path.exists(mouse_path)}")
-        print(f"Bubble path: {bubble_path}")
-        print(f"Bubble file exists: {os.path.exists(bubble_path)}")
+        mouse_path = os.path.join(SCRIPT_DIR, "mouse.webp")
+        bubble_path = os.path.join(SCRIPT_DIR, "bulle_parole.webp")
         # Load mouse image to get its size
         if os.path.exists(mouse_path):
             from PIL import Image
@@ -2906,7 +2581,7 @@ Average Score: {avg_score:.3f}
         mouse_label = QLabel(dialog)
         mouse_label.resize(scaled_mouse_width, scaled_mouse_height)
         mouse_label.setAttribute(Qt.WA_TranslucentBackground)
-        if os.path.splitext(mouse_path)[1].lower() in [".gif"]:
+        if os.path.splitext(mouse_path)[1].lower() in [".gif", ".webp"]:
             movie = QMovie(mouse_path)
             movie.setScaledSize(QSize(scaled_mouse_width, scaled_mouse_height))
             mouse_label.setMovie(movie)
@@ -3060,9 +2735,8 @@ Average Score: {avg_score:.3f}
         total = len(self.onsets)
         non_pending = sum(
             1 for o in self.onsets
-            if self.timeline_canvas.onset_validations.get(o, 'pending') not in ['pending']
+            if self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending'
         )
-        print(f"Mouse milestone check: total={total}, non_pending={non_pending}, half_shown={getattr(self, '_mouse_half_shown', False)}")
         # 1. Always show at halfway
         halfway = total // 2
         if not getattr(self, '_mouse_half_shown', False) and non_pending >= halfway and total > 0:
@@ -3159,7 +2833,7 @@ Average Score: {avg_score:.3f}
         # Create dropdown
         from PyQt5.QtWidgets import QComboBox
         self.change_type_dropdown = QComboBox(self)
-        self.change_type_dropdown.addItems(self.available_event_types)
+        self.change_type_dropdown.addItems(["twitch", "active", "complex"])
         # Set current type as selected
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             current_onset = self.filtered_onsets[self.current_onset_idx]
@@ -3184,80 +2858,6 @@ Average Score: {avg_score:.3f}
             self.change_type_dropdown.hide()
             self.change_type_dropdown.deleteLater()
             self.change_type_dropdown = None
-
-    def open_add_type_dialog(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Add a new event type")
-        layout = QVBoxLayout(dialog)
-        form_layout = QGridLayout()
-        name_label = QLabel("Type name:")
-        name_input = QLineEdit()
-        form_layout.addWidget(name_label, 0, 0)
-        form_layout.addWidget(name_input, 0, 1)
-        color_label = QLabel("Color:")
-        color_preview = QLabel("     ")
-        color_preview.setStyleSheet("background: #888; border: 1px solid #444;")
-        pick_btn = QPushButton("Pick color")
-        form_layout.addWidget(color_label, 1, 0)
-        form_layout.addWidget(color_preview, 1, 1)
-        form_layout.addWidget(pick_btn, 1, 2)
-        layout.addLayout(form_layout)
-        btns = QHBoxLayout()
-        ok_btn = QPushButton("Add")
-        cancel_btn = QPushButton("Cancel")
-        btns.addWidget(ok_btn)
-        btns.addWidget(cancel_btn)
-        layout.addLayout(btns)
-
-        selected_color = {'value': '#888888'}
-
-        def pick_color():
-            color = QColorDialog.getColor(QColor(selected_color['value']), self, "Choose color")
-            if color.isValid():
-                selected_color['value'] = color.name()
-                color_preview.setStyleSheet(f"background: {selected_color['value']}; border: 1px solid #444;")
-
-        pick_btn.clicked.connect(pick_color)
-
-        def accept():
-            name = name_input.text().strip()
-            if not name:
-                QMessageBox.warning(self, "Invalid name", "Please enter a type name.")
-                return
-            key = name.lower()
-            if key in self.available_event_types:
-                QMessageBox.information(self, "Already exists", f"Type '{name}' already exists.")
-                return
-            # Save
-            self.available_event_types.append(key)
-            self.event_type_colors[key] = selected_color['value']
-            # Update UI combos
-            # Manual add combo (preserve placeholder at index 0)
-            current_placeholder = self.event_type_combo.itemText(0)
-            self.event_type_combo.clear()
-            self.event_type_combo.addItem(current_placeholder)
-            self.event_type_combo.addItems(self.available_event_types)
-            self.event_type_combo.setCurrentIndex(0)
-            # Onset filter combo
-            current_status_idx = self.onset_filter_combo.currentIndex()
-            self.onset_filter_combo.clear()
-            self.onset_filter_combo.addItems(["All"] + [t.capitalize() for t in self.available_event_types])
-            # Keep selection if possible
-            if current_status_idx < self.onset_filter_combo.count():
-                self.onset_filter_combo.setCurrentIndex(current_status_idx)
-            # Change-type dropdown if currently open
-            if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
-                self.change_type_dropdown.clear()
-                self.change_type_dropdown.addItems(self.available_event_types)
-            # Also propagate mapping to timeline canvas
-            if hasattr(self, 'timeline_canvas'):
-                self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
-            dialog.accept()
-            self.redraw()
-
-        ok_btn.clicked.connect(accept)
-        cancel_btn.clicked.connect(dialog.reject)
-        dialog.exec_()
 
 
 def main(): # launches play button and then main mousecraft 
