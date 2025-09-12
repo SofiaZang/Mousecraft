@@ -154,6 +154,14 @@ class DraggableTimeline(FigureCanvas):
         self.ax.set_ylim(0, max(self.motion_energy) * 1.2)  # Increased ylim to accommodate bullets
         self.ax.set_ylabel("motion_energy", fontsize=7)
         self.ax.set_xlabel("Frame", fontsize=7)
+        # Remove top/right spines and ensure only bottom/left axes are shown
+        try:
+            self.ax.spines['top'].set_visible(False)
+            self.ax.spines['right'].set_visible(False)
+            self.ax.xaxis.set_ticks_position('bottom')
+            self.ax.yaxis.set_ticks_position('left')
+        except Exception:
+            pass
         self.ax.set_title("classified motion", fontsize=9)
         self.ax.set_yticks([])
         self.ax.tick_params(axis='x', labelsize=6)
@@ -720,6 +728,9 @@ class MotionAnnotator(QWidget):
         content_layout.addWidget(splitter)
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
+        # Manual-only mode flags (when only raw motion is loaded)
+        self.manual_mode_primary = False
+        self.manual_mode_secondary = False
         # Supprimer l'appel à QTimer.singleShot(b0, self.finalize_ui) et la méthode finalize_ui
         # Supprimer l'ajout du bouton Pause (et des autres boutons de contrôle vidéo) au left_panel si ce n'est pas nécessaire
         # Garder la configuration des boutons dans la barre de contrôle vidéo
@@ -888,13 +899,12 @@ class MotionAnnotator(QWidget):
         try:
             lower = fname.lower()
             if lower.endswith('.npy'):
-                # Treat as motion energy
+                # Treat as motion energy (manual-only mode)
                 self.motion_energy = np.load(fname)
                 self.prepare_motion_energy()
-                # Reset timeline zoom on input load
                 self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
-                # Reset timeline axes to full range
                 self.reset_zoom_timeline()
+                self.manual_mode_primary = True
             elif lower.endswith('.json'):
                 # Classifications JSON
                 self.load_json_classifications(fname)
@@ -903,7 +913,7 @@ class MotionAnnotator(QWidget):
                 try:
                     self.load_classifications_from_path(fname)
                 except Exception:
-                    # fallback: motion energy
+                    # fallback: motion energy (manual-only mode)
                     if lower.endswith('.csv'):
                         df = pd.read_csv(fname)
                     else:
@@ -912,6 +922,7 @@ class MotionAnnotator(QWidget):
                     self.prepare_motion_energy()
                     self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
                     self.reset_zoom_timeline()
+                    self.manual_mode_primary = True
             else:
                 QMessageBox.warning(self, 'Unsupported file', 'Please select a .json, .csv, .xlsx, or .npy file.')
                 return
@@ -941,8 +952,7 @@ class MotionAnnotator(QWidget):
             else:
                 QMessageBox.warning(self, 'Unsupported file', 'Please select a .csv, .xlsx, or .npy file for the second input.')
                 return
-            # Prepare and plot on secondary timeline
-            # Align length to primary timeline if necessary for xlim
+            # Prepare and plot on secondary timeline (manual-only if raw motion)
             total_frames2 = len(second_motion)
             self.timeline_canvas2.total_frames = total_frames2
             self.timeline_canvas2.motion_energy = second_motion
@@ -955,6 +965,8 @@ class MotionAnnotator(QWidget):
             self.onsets2 = []
             self.onset_types2 = {}
             self.timeline_canvas2.event_offsets = {}
+            # If loaded from npy or from a CSV/XLSX that is motion-only, enable manual-only mode for secondary
+            self.manual_mode_secondary = True
             # Show second timeline and equalize space
             self.timeline_canvas2.show()
             self.timeline_splitter.setSizes([1, 1])
@@ -2097,6 +2109,11 @@ Average Score: {avg_score:.3f}
         ax1.set_xlim(0, len(self.motion_energy))
         ax1.set_ylim(0, max(self.motion_energy) * 1.1)
         ax1.grid(True, alpha=0.3)
+        try:
+            ax1.spines['top'].set_visible(False)
+            ax1.spines['right'].set_visible(False)
+        except Exception:
+            pass
         
         # Bottom subplot: Validated classification (with validation markers)
         ax2.plot(np.arange(len(self.motion_energy)), self.motion_energy, color='blue', linewidth=1, alpha=0.7)
@@ -2152,6 +2169,11 @@ Average Score: {avg_score:.3f}
         ax2.set_xlim(0, len(self.motion_energy))
         ax2.set_ylim(0, max(self.motion_energy) * 1.2)
         ax2.grid(True, alpha=0.3)
+        try:
+            ax2.spines['top'].set_visible(False)
+            ax2.spines['right'].set_visible(False)
+        except Exception:
+            pass
         
         # Add legend
         legend_elements = [
@@ -2749,11 +2771,17 @@ Average Score: {avg_score:.3f}
                 return
         output_dir = os.path.join(dir_path, 'mousecraft_output')
         os.makedirs(output_dir, exist_ok=True)
+        # If no classification table is present, build a minimal input table from motion length
         if not hasattr(self, 'input_classification_df') or self.input_classification_df is None:
-            QMessageBox.warning(self, "Export", "Please load a classification file first.")
-            return
-        input_df = self.input_classification_df.copy()
-        has_pending = any(self.timeline_canvas.onset_validations.get(onset, 'pending') == 'pending' for onset in self.onsets)
+            import pandas as pd
+            n_frames = len(self.motion_energy) if self.motion_energy is not None else (max(self.onsets)+1 if self.onsets else 0)
+            input_df = pd.DataFrame({'frame_idx': list(range(n_frames))})
+            has_pending = False
+            manual_only_export = True
+        else:
+            input_df = self.input_classification_df.copy()
+            has_pending = any(self.timeline_canvas.onset_validations.get(onset, 'pending') == 'pending' for onset in self.onsets)
+            manual_only_export = False
         suffix = '_pending' if has_pending else '_final'
         mf_df = input_df.copy()
         n_frames = len(mf_df)
@@ -2769,12 +2797,15 @@ Average Score: {avg_score:.3f}
             # Always use the current (possibly edited) onset and offset
             start = min(onset, self.timeline_canvas.event_offsets.get(onset, onset))
             end = max(onset, self.timeline_canvas.event_offsets.get(onset, onset))
-            # For export: make offset inclusive
-            export_offset = end + 1 if end > start else end
+            # For export: make offset inclusive; ensure at least one-frame span
+            export_offset = end + 1 if end > start else (start + 1)
             if event_type in ['active', 'twitch', 'complex']:
                 mf_df.loc[start:end, event_type] = 1
             # Write status and score only at the onset frame
-            if status == 'accepted':
+            if manual_only_export:
+                score = 0
+                status_label = 'manually added'
+            elif status == 'accepted':
                 score = 1
                 status_label = 'accepted'
             elif status == 'rejected':
@@ -2795,23 +2826,39 @@ Average Score: {avg_score:.3f}
             mf_df.at[onset, 'status'] = status_label
             mf_df.at[onset, 'score'] = score
         mf_path = os.path.join(output_dir, f"validation_MF{suffix}.xlsx")
+        created_files = []
         try:
             mf_df.to_excel(mf_path, index=False)
+            created_files.append(mf_path)
         except PermissionError:
             # Try saving in a new folder
             alt_dir = os.path.join(os.path.dirname(output_dir), "mousecraft_output_2")
             os.makedirs(alt_dir, exist_ok=True)
             alt_path = os.path.join(alt_dir, os.path.basename(mf_path))
             mf_df.to_excel(alt_path, index=False)
+            created_files.append(alt_path)
             QMessageBox.warning(
                 self, "Export Warning",
                 "Careful: I could not overwrite the file because it is open in Excel (or another program).\n"
                 f"The output was saved in {alt_dir} instead."
             )
+        except Exception:
+            # Fallback to CSV in the same directory
+            mf_path_csv = os.path.join(output_dir, f"validation_MF{suffix}.csv")
+            try:
+                mf_df.to_csv(mf_path_csv, index=False)
+                created_files.append(mf_path_csv)
+            except Exception as e2:
+                QMessageBox.critical(self, "Export Error", f"Failed to save validation_MF: {e2}")
         # Sauvegarde aussi en numpy uniquement
         import numpy as np
-        mf_npy_path = os.path.splitext(mf_path)[0] + ".npy"
-        np.save(mf_npy_path, mf_df.to_numpy())
+        if len(mf_df) > 0:
+            mf_npy_path = os.path.splitext(created_files[-1])[0] + ".npy" if created_files else os.path.join(output_dir, f"validation_MF{suffix}.npy")
+            try:
+                np.save(mf_npy_path, mf_df.to_numpy())
+                created_files.append(mf_npy_path)
+            except Exception:
+                pass
         export_events = []
         for onset in self.onsets:
             offset = self.timeline_canvas.event_offsets.get(onset, onset)
@@ -2830,14 +2877,33 @@ Average Score: {avg_score:.3f}
             export_events.append([onset, offset, event_type, status, score])
         hf_df = pd.DataFrame(export_events, columns=pd.Index(['onset', 'offset', 'event_type', 'status', 'score']))
         hf_path = os.path.join(output_dir, f"validation_HF{suffix}.xlsx")
-        hf_df.to_excel(hf_path, index=False)
+        try:
+            hf_df.to_excel(hf_path, index=False)
+            created_files.append(hf_path)
+        except Exception:
+            # Fallback to CSV
+            hf_path_csv = os.path.join(output_dir, f"validation_HF{suffix}.csv")
+            try:
+                hf_df.to_csv(hf_path_csv, index=False)
+                created_files.append(hf_path_csv)
+            except Exception as e2:
+                QMessageBox.critical(self, "Export Error", f"Failed to save validation_HF: {e2}")
         # Sauvegarde aussi en numpy uniquement
-        hf_npy_path = os.path.splitext(hf_path)[0] + ".npy"
-        np.save(hf_npy_path, hf_df.to_numpy())
+        if len(hf_df) > 0:
+            hf_npy_path = os.path.splitext(created_files[-1])[0] + ".npy" if created_files else os.path.join(output_dir, f"validation_HF{suffix}.npy")
+            try:
+                np.save(hf_npy_path, hf_df.to_numpy())
+                created_files.append(hf_npy_path)
+            except Exception:
+                pass
         plot_path = os.path.join(output_dir, f"validation_comparison_plot{suffix}.png")
-        self.create_validation_comparison_plot(export_events, save_path=plot_path)
+        try:
+            self.create_validation_comparison_plot(export_events, save_path=plot_path)
+            created_files.append(plot_path)
+        except Exception:
+            pass
         # Add final classification plot only if no pending events
-        if not has_pending:
+        if not has_pending and not manual_only_export:
             # Remove all _pending files in output_dir
             for fname in os.listdir(output_dir):
                 if '_pending' in fname:
@@ -2846,35 +2912,48 @@ Average Score: {avg_score:.3f}
                     except Exception as e:
                         print(f"Could not remove {fname}: {e}")
             final_plot_path = os.path.join(output_dir, f"final_classification_plot{suffix}.png")
-            self.create_final_classification_plot(export_events, save_path=final_plot_path)
+            try:
+                self.create_final_classification_plot(export_events, save_path=final_plot_path)
+                created_files.append(final_plot_path)
+            except Exception:
+                pass
         # Export pie chart of event status distribution
         pie_chart_path = os.path.join(output_dir, f"validation_status_pie{suffix}.png")
-        self.create_validation_pie_chart(export_events, save_path=pie_chart_path)
+        try:
+            self.create_validation_pie_chart(export_events, save_path=pie_chart_path)
+            created_files.append(pie_chart_path)
+        except Exception:
+            pass
         # Export metrics JSON
-        true_positives = sum(1 for event in export_events if event[3] in ('accepted', 'edited'))
-        false_positives = sum(1 for event in export_events if event[3] == 'rejected')
-        total = true_positives + false_positives
-        precision = true_positives / total if total > 0 else 0
-        results = {
-            'performance_metrics': {
-                'true_positives': true_positives,
-                'false_positives': false_positives
-            },
-            'precision': precision,
-            'total_annotated': total
-        }
         metrics_path = os.path.join(output_dir, f"validation_metrics{suffix}.json")
-        with open(metrics_path, 'w') as f:
-            json.dump(results, f, indent=2)
-        msg = f"Exported to: {output_dir}\n\n"
-        msg += f"- {os.path.basename(mf_path)}\n"
-        msg += f"- {os.path.splitext(os.path.basename(mf_path))[0]}.npy\n"
-        msg += f"- {os.path.basename(hf_path)}\n"
-        msg += f"- {os.path.splitext(os.path.basename(hf_path))[0]}.npy\n"
-        msg += f"- {os.path.basename(plot_path)}\n"
-        if not has_pending:
-            msg += f"- {os.path.basename(final_plot_path)}\n"
-        msg += f"- {os.path.basename(metrics_path)}"
+        if manual_only_export:
+            try:
+                with open(metrics_path, 'w') as f:
+                    json.dump({'mode': 'manual_only', 'note': 'All events are manually added; no performance metrics.'}, f, indent=2)
+                created_files.append(metrics_path)
+            except Exception:
+                pass
+        else:
+            true_positives = sum(1 for event in export_events if event[3] in ('accepted', 'edited'))
+            false_positives = sum(1 for event in export_events if event[3] == 'rejected')
+            total = true_positives + false_positives
+            precision = true_positives / total if total > 0 else 0
+            results = {
+                'performance_metrics': {
+                    'true_positives': true_positives,
+                    'false_positives': false_positives
+                },
+                'precision': precision,
+                'total_annotated': total
+            }
+            try:
+                with open(metrics_path, 'w') as f:
+                    json.dump(results, f, indent=2)
+                created_files.append(metrics_path)
+            except Exception:
+                pass
+        # Build message from actually created files
+        msg = f"Exported to: {output_dir}\n\n" + "\n".join(f"- {os.path.basename(p)}" for p in created_files)
         QMessageBox.information(self, "Export", msg)
         # Après export, reset le flag
         self.unsaved_changes = False
