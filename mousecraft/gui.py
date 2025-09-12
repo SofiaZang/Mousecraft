@@ -37,9 +37,9 @@ class DraggableTimeline(FigureCanvas):
         self.setParent(parent)
         
         self.ax = self.fig.add_subplot(111)
-        # Ensure bottom margin so x ticks aren't hidden by following widgets
+        # Ensure margins so x ticks aren't hidden and top is neat
         try:
-            self.fig.subplots_adjust(bottom=0.2)
+            self.fig.subplots_adjust(bottom=0.25, top=0.95)
         except Exception:
             pass
         self.current_frame = 0
@@ -111,11 +111,15 @@ class DraggableTimeline(FigureCanvas):
             }
 
         self.ax.clear()
-        self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='blue', linewidth=1)  # Use lighter blue for motion energy
+        self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='#1f77b4', linewidth=1)
 
+        # Determine which event types to display (if restricted)
+        allowed_types = getattr(self, 'visible_event_types', None)
         # Plot onset-to-offset spans
         for onset in self.onsets:
             onset_type = self.onset_types.get(onset, '')
+            if allowed_types is not None and str(onset_type).lower() not in {t.lower() for t in allowed_types}:
+                continue
             offset = self.event_offsets.get(onset, onset)
             status = self.event_status.get(onset, '')
             alpha = 1.0 if status == 'accepted' else 0.4
@@ -123,7 +127,15 @@ class DraggableTimeline(FigureCanvas):
             color_key = str(onset_type).lower()
             color_value = self.event_type_colors.get(color_key, self.event_type_colors.get(onset_type, None))
             if color_value is None:
-                color_value = '#888888'
+                # Default colors: twitch purple, active yellow, complex cyan
+                if color_key == 'twitch':
+                    color_value = 'purple'
+                elif color_key == 'active':
+                    color_value = 'yellow'
+                elif color_key == 'complex':
+                    color_value = 'cyan'
+                else:
+                    color_value = '#888888'
             self.ax.axvspan(onset, offset, color=color_value, alpha=alpha)
 
         # Add validation markers as bullet points on top
@@ -566,6 +578,8 @@ class MotionAnnotator(QWidget):
             self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
         except Exception:
             pass
+        # By default, hide complex events (match your first-case display)
+        self.timeline_canvas.visible_event_types = ['twitch', 'active'] # add complex if you want to see it displayed 
         self.timeline_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.timeline_canvas.setMinimumHeight(200)
         self.timeline_canvas.setMaximumHeight(500)
@@ -581,6 +595,8 @@ class MotionAnnotator(QWidget):
             self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
         except Exception:
             pass
+        # Keep same visibility policy by default
+        self.timeline_canvas2.visible_event_types = ['twitch', 'active']
         self.timeline_canvas2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.timeline_canvas2.setMinimumHeight(200)
         self.timeline_canvas2.setMaximumHeight(500)
@@ -981,14 +997,127 @@ class MotionAnnotator(QWidget):
             return
         try:
             lower = fname.lower()
+            classified_loaded = False
             if lower.endswith('.npy'):
                 second_motion = np.load(fname)
             elif lower.endswith('.csv'):
                 df = pd.read_csv(fname)
-                second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+                cols = set(df.columns)
+                # Detect classified schema and build events for second timeline
+                if {'active', 'twitch'}.issubset(cols) or {'complex'}.issubset(cols):
+                    # Motion energy if present
+                    if 'motion_energy' in df.columns:
+                        second_motion = df['motion_energy'].values.astype(np.float64)
+                    else:
+                        second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+                    self.onsets2 = []
+                    self.onset_types2 = {}
+                    self.timeline_canvas2.event_offsets = {}
+                    for event_type in ['active', 'twitch', 'complex']:
+                        if event_type in df.columns:
+                            arr = df[event_type].values
+                            in_event = False
+                            for i, val in enumerate(arr):
+                                if val == 1 and not in_event:
+                                    onset = i
+                                    in_event = True
+                                elif val == 0 and in_event:
+                                    offset = i - 1
+                                    if onset not in self.onsets2:
+                                        self.onsets2.append(onset)
+                                        self.onset_types2[onset] = event_type
+                                        self.timeline_canvas2.event_offsets[onset] = offset
+                                    in_event = False
+                            if in_event:
+                                offset = len(arr) - 1
+                                if onset not in self.onsets2:
+                                    self.onsets2.append(onset)
+                                    self.onset_types2[onset] = event_type
+                                    self.timeline_canvas2.event_offsets[onset] = offset
+                    self.onsets2 = sorted(set(self.onsets2))
+                    # Initialize validations as pending; user can validate
+                    self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
+                    classified_loaded = True
+                elif {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols) or {'complex_motion_onset', 'complex_motion_offset'}.issubset(cols):
+                    if 'motion_energy' in df.columns:
+                        second_motion = df['motion_energy'].values.astype(np.float64)
+                    else:
+                        second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+                    self.onsets2 = []
+                    self.onset_types2 = {}
+                    self.timeline_canvas2.event_offsets = {}
+                    def collect(on_col, off_col, etype):
+                        if on_col in df.columns and off_col in df.columns:
+                            ons = np.where(df[on_col].values == 1)[0]
+                            offs = np.where(df[off_col].values == 1)[0]
+                            for onset in ons:
+                                # find next offset after onset
+                                next_offs = offs[offs > onset]
+                                offset = int(next_offs[0]) if len(next_offs) > 0 else onset
+                                offset = offset if offset >= onset else onset
+                                self.onsets2.append(onset)
+                                self.onset_types2[onset] = etype
+                                self.timeline_canvas2.event_offsets[onset] = offset
+                    collect('active_motion_onset', 'active_motion_offset', 'active')
+                    collect('twitch_onset', 'twitch_offset', 'twitch')
+                    collect('complex_motion_onset', 'complex_motion_offset', 'complex')
+                    self.onsets2 = sorted(set(self.onsets2))
+                    self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
+                    classified_loaded = True
+                else:
+                    # fallback: motion-only
+                    second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
             elif lower.endswith('.xlsx'):
                 df = pd.read_excel(fname)
-                second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+                cols = set(df.columns)
+                if {'active', 'twitch'}.issubset(cols) or {'complex'}.issubset(cols) or {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols) or {'complex_motion_onset', 'complex_motion_offset'}.issubset(cols):
+                    if 'motion_energy' in df.columns:
+                        second_motion = df['motion_energy'].values.astype(np.float64)
+                    else:
+                        second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+                    self.onsets2 = []
+                    self.onset_types2 = {}
+                    self.timeline_canvas2.event_offsets = {}
+                    if {'active', 'twitch'}.issubset(cols) or {'complex'}.issubset(cols):
+                        for event_type in ['active', 'twitch', 'complex']:
+                            if event_type in df.columns:
+                                arr = df[event_type].values
+                                in_event = False
+                                for i, val in enumerate(arr):
+                                    if val == 1 and not in_event:
+                                        onset = i
+                                        in_event = True
+                                    elif val == 0 and in_event:
+                                        offset = i - 1
+                                        if onset not in self.onsets2:
+                                            self.onsets2.append(onset)
+                                            self.onset_types2[onset] = event_type
+                                            self.timeline_canvas2.event_offsets[onset] = offset
+                                        in_event = False
+                                if in_event:
+                                    offset = len(arr) - 1
+                                    if onset not in self.onsets2:
+                                        self.onsets2.append(onset)
+                                        self.onset_types2[onset] = event_type
+                                        self.timeline_canvas2.event_offsets[onset] = offset
+                    else:
+                        def collect(on_col, off_col, etype):
+                            if on_col in df.columns and off_col in df.columns:
+                                ons = np.where(df[on_col].values == 1)[0]
+                                offs = np.where(df[off_col].values == 1)[0]
+                                for onset in ons:
+                                    next_offs = offs[offs > onset]
+                                    offset = int(next_offs[0]) if len(next_offs) > 0 else onset
+                                    offset = offset if offset >= onset else onset
+                                    self.onsets2.append(onset)
+                                    self.onset_types2[onset] = etype
+                                    self.timeline_canvas2.event_offsets[onset] = offset
+                        collect('active_motion_onset', 'active_motion_offset', 'active')
+                        collect('twitch_onset', 'twitch_offset', 'twitch')
+                        collect('complex_motion_onset', 'complex_motion_offset', 'complex')
+                    self.onsets2 = sorted(set(self.onsets2))
+                    self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
+                    classified_loaded = True
             else:
                 QMessageBox.warning(self, 'Unsupported file', 'Please select a .csv, .xlsx, or .npy file for the second input.')
                 return
@@ -996,17 +1125,30 @@ class MotionAnnotator(QWidget):
             total_frames2 = len(second_motion)
             self.timeline_canvas2.total_frames = total_frames2
             self.timeline_canvas2.motion_energy = second_motion
-            self.timeline_canvas2.onsets = []
-            self.timeline_canvas2.onset_types = {}
-            self.timeline_canvas2.event_offsets = {}
+            if not classified_loaded:
+                self.timeline_canvas2.onsets = []
+                self.timeline_canvas2.onset_types = {}
+                self.timeline_canvas2.event_offsets = {}
+                self.onsets2 = []
+                self.onset_types2 = {}
+                self.timeline_canvas2.onset_validations = {}
+                self.manual_mode_secondary = True
+            else:
+                # Push parsed second annotations into canvas2 for display
+                self.timeline_canvas2.onsets = list(self.onsets2)
+                self.timeline_canvas2.onset_types = dict(self.onset_types2)
+                self.manual_mode_secondary = False
+                # Match visibility policy with primary (hide complex by default)
+                self.timeline_canvas2.visible_event_types = getattr(self.timeline_canvas, 'visible_event_types', ['twitch', 'active'])
             self.timeline_canvas2.current_frame = getattr(self.timeline_canvas, 'current_frame', 0)
-            self.timeline_canvas2.plot_motion_energy(second_motion, [], {}, {}, None)
-            # Initialize separate annotation stores for second signal
-            self.onsets2 = []
-            self.onset_types2 = {}
-            self.timeline_canvas2.event_offsets = {}
-            # If loaded from npy or from a CSV/XLSX that is motion-only, enable manual-only mode for secondary
-            self.manual_mode_secondary = True
+            # Plot with available second annotations (if any)
+            self.timeline_canvas2.plot_motion_energy_preserve_view(
+                self.timeline_canvas2.motion_energy,
+                getattr(self, 'onsets2', []),
+                getattr(self, 'onset_types2', {}),
+                self.timeline_canvas2.event_offsets,
+                None
+            )
             # Show second timeline and equalize space
             self.timeline_canvas2.show()
             self.timeline_splitter.setSizes([1, 1])
@@ -2220,7 +2362,7 @@ Average Score: {avg_score:.3f}
                     color = 'orange'  # Fallback
                 ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
             elif status == 'manually added':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='#00CED1', markersize=6)
+                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='blue', markersize=6)
         
         ax2.set_title('Validated Motion Energy Classification', fontsize=14, fontweight='bold')
         ax2.set_xlabel('Frame', fontsize=12)
