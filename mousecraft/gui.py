@@ -285,6 +285,7 @@ class MotionAnnotator(QWidget):
         self.setGeometry(100, 100, 1400, 900)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
+        self.start_mouse_timer()
         # Set window icon to mouse.webp if possible, else fallback to MouseCraft.png
         mouse_icon_path = os.path.join(SCRIPT_DIR, 'resources',"mouse.png")
         mousecraft_icon_path = os.path.join(SCRIPT_DIR, 'resources', "MouseCraft.png")
@@ -584,6 +585,7 @@ class MotionAnnotator(QWidget):
         self.timeline_canvas.setMinimumHeight(200)
         self.timeline_canvas.setMaximumHeight(500)
         self.timeline_canvas.timeline_moved.connect(self.timeline_frame_changed_primary)
+        
         def _focus_primary():
             self.active_timeline_index = 1
             if hasattr(self, 'annotate_primary_radio'):
@@ -989,178 +991,109 @@ class MotionAnnotator(QWidget):
             QMessageBox.critical(self, 'Error', f'Failed to load input: {str(e)}')
             import traceback
             traceback.print_exc()
-
+            
     def load_second_input(self):
         """Load a second motion input and display it on the secondary timeline without changing overall layout sizing."""
-        fname, _ = QFileDialog.getOpenFileName(self, 'Load second input', '', 'Motion (*.npy *.csv *.xlsx)')
+        fname, _ = QFileDialog.getOpenFileName(
+            self, 'Load second input', '',
+            'All Supported (*.json *.csv *.xlsx *.npy);;JSON (*.json);;CSV (*.csv);;Excel (*.xlsx);;NumPy (*.npy)'
+        )
         if not fname:
             return
         try:
             lower = fname.lower()
             classified_loaded = False
+
             if lower.endswith('.npy'):
+            # Motion energy only
                 second_motion = np.load(fname)
-            elif lower.endswith('.csv'):
-                df = pd.read_csv(fname)
-                cols = set(df.columns)
-                # Detect classified schema and build events for second timeline
-                if {'active', 'twitch'}.issubset(cols) or {'complex'}.issubset(cols):
-                    # Motion energy if present
-                    if 'motion_energy' in df.columns:
-                        second_motion = df['motion_energy'].values.astype(np.float64)
-                    else:
-                        second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
-                    self.onsets2 = []
-                    self.onset_types2 = {}
-                    self.timeline_canvas2.event_offsets = {}
-                    for event_type in ['active', 'twitch', 'complex']:
-                        if event_type in df.columns:
-                            arr = df[event_type].values
-                            in_event = False
-                            for i, val in enumerate(arr):
-                                if val == 1 and not in_event:
-                                    onset = i
-                                    in_event = True
-                                elif val == 0 and in_event:
-                                    offset = i - 1
-                                    if onset not in self.onsets2:
-                                        self.onsets2.append(onset)
-                                        self.onset_types2[onset] = event_type
-                                        self.timeline_canvas2.event_offsets[onset] = offset
-                                    in_event = False
-                            if in_event:
-                                offset = len(arr) - 1
-                                if onset not in self.onsets2:
-                                    self.onsets2.append(onset)
-                                    self.onset_types2[onset] = event_type
-                                    self.timeline_canvas2.event_offsets[onset] = offset
-                    self.onsets2 = sorted(set(self.onsets2))
-                    # Initialize validations as pending; user can validate
-                    self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
+                self.timeline_canvas2.motion_energy = second_motion
+                self.timeline_canvas2.onsets = []
+                self.timeline_canvas2.onset_types = {}
+                self.timeline_canvas2.event_offsets = {}
+                self.timeline_canvas2.onset_validations = {}
+                self.manual_mode_secondary = True
+                classified_loaded = False
+
+            elif lower.endswith('.json'):
+                # JSON classifications
+                self.onsets2, self.onset_types2, self.timeline_canvas2.event_offsets = self.load_json_classifications(fname)
+                classified_loaded = True
+
+            elif lower.endswith('.csv') or lower.endswith('.xlsx'):
+                # Try as classifications
+                try:
+                    self.onsets2, self.onset_types2, self.timeline_canvas2.event_offsets = self.load_classifications_from_path(fname)
                     classified_loaded = True
-                elif {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols) or {'complex_motion_onset', 'complex_motion_offset'}.issubset(cols):
-                    if 'motion_energy' in df.columns:
-                        second_motion = df['motion_energy'].values.astype(np.float64)
-                    else:
-                        second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
-                    self.onsets2 = []
-                    self.onset_types2 = {}
-                    self.timeline_canvas2.event_offsets = {}
-                    def collect(on_col, off_col, etype):
-                        if on_col in df.columns and off_col in df.columns:
-                            ons = np.where(df[on_col].values == 1)[0]
-                            offs = np.where(df[off_col].values == 1)[0]
-                            for onset in ons:
-                                # find next offset after onset
-                                next_offs = offs[offs > onset]
-                                offset = int(next_offs[0]) if len(next_offs) > 0 else onset
-                                offset = offset if offset >= onset else onset
-                                self.onsets2.append(onset)
-                                self.onset_types2[onset] = etype
-                                self.timeline_canvas2.event_offsets[onset] = offset
-                    collect('active_motion_onset', 'active_motion_offset', 'active')
-                    collect('twitch_onset', 'twitch_offset', 'twitch')
-                    collect('complex_motion_onset', 'complex_motion_offset', 'complex')
-                    self.onsets2 = sorted(set(self.onsets2))
-                    self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
-                    classified_loaded = True
-                else:
+                except Exception:
                     # fallback: motion-only
+                    if lower.endswith('.csv'):
+                        df = pd.read_csv(fname)
+                    else:
+                        df = pd.read_excel(fname)
                     second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
-            elif lower.endswith('.xlsx'):
-                df = pd.read_excel(fname)
-                cols = set(df.columns)
-                if {'active', 'twitch'}.issubset(cols) or {'complex'}.issubset(cols) or {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols) or {'complex_motion_onset', 'complex_motion_offset'}.issubset(cols):
-                    if 'motion_energy' in df.columns:
-                        second_motion = df['motion_energy'].values.astype(np.float64)
-                    else:
-                        second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
-                    self.onsets2 = []
-                    self.onset_types2 = {}
+                    self.timeline_canvas2.motion_energy = second_motion
+                    self.timeline_canvas2.onsets = []
+                    self.timeline_canvas2.onset_types = {}
                     self.timeline_canvas2.event_offsets = {}
-                    if {'active', 'twitch'}.issubset(cols) or {'complex'}.issubset(cols):
-                        for event_type in ['active', 'twitch', 'complex']:
-                            if event_type in df.columns:
-                                arr = df[event_type].values
-                                in_event = False
-                                for i, val in enumerate(arr):
-                                    if val == 1 and not in_event:
-                                        onset = i
-                                        in_event = True
-                                    elif val == 0 and in_event:
-                                        offset = i - 1
-                                        if onset not in self.onsets2:
-                                            self.onsets2.append(onset)
-                                            self.onset_types2[onset] = event_type
-                                            self.timeline_canvas2.event_offsets[onset] = offset
-                                        in_event = False
-                                if in_event:
-                                    offset = len(arr) - 1
-                                    if onset not in self.onsets2:
-                                        self.onsets2.append(onset)
-                                        self.onset_types2[onset] = event_type
-                                        self.timeline_canvas2.event_offsets[onset] = offset
-                    else:
-                        def collect(on_col, off_col, etype):
-                            if on_col in df.columns and off_col in df.columns:
-                                ons = np.where(df[on_col].values == 1)[0]
-                                offs = np.where(df[off_col].values == 1)[0]
-                                for onset in ons:
-                                    next_offs = offs[offs > onset]
-                                    offset = int(next_offs[0]) if len(next_offs) > 0 else onset
-                                    offset = offset if offset >= onset else onset
-                                    self.onsets2.append(onset)
-                                    self.onset_types2[onset] = etype
-                                    self.timeline_canvas2.event_offsets[onset] = offset
-                        collect('active_motion_onset', 'active_motion_offset', 'active')
-                        collect('twitch_onset', 'twitch_offset', 'twitch')
-                        collect('complex_motion_onset', 'complex_motion_offset', 'complex')
-                    self.onsets2 = sorted(set(self.onsets2))
-                    self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
-                    classified_loaded = True
+                    self.timeline_canvas2.onset_validations = {}
+                    self.manual_mode_secondary = True
+                    classified_loaded = False
+
             else:
-                QMessageBox.warning(self, 'Unsupported file', 'Please select a .csv, .xlsx, or .npy file for the second input.')
+                QMessageBox.warning(
+                    self, 'Unsupported file',
+                    'Please select a .json, .csv, .xlsx, or .npy file for the second input.'
+                )
                 return
-            # Prepare and plot on secondary timeline (manual-only if raw motion)
-            total_frames2 = len(second_motion)
-            self.timeline_canvas2.total_frames = total_frames2
-            self.timeline_canvas2.motion_energy = second_motion
+
+            # Push parsed second annotations into canvas2
+            if classified_loaded:
+                self.timeline_canvas2.onsets = list(self.onsets2)
+                self.timeline_canvas2.onset_types = dict(self.onset_types2)
+                self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
+                self.manual_mode_secondary = False
+                self.timeline_canvas2.visible_event_types = getattr(
+                    self.timeline_canvas, 'visible_event_types', ['twitch', 'active']
+                )
+
+            # Prepare and plot
             if not classified_loaded:
                 self.timeline_canvas2.onsets = []
                 self.timeline_canvas2.onset_types = {}
                 self.timeline_canvas2.event_offsets = {}
-                self.onsets2 = []
-                self.onset_types2 = {}
                 self.timeline_canvas2.onset_validations = {}
-                self.manual_mode_secondary = True
             else:
-                # Push parsed second annotations into canvas2 for display
-                self.timeline_canvas2.onsets = list(self.onsets2)
-                self.timeline_canvas2.onset_types = dict(self.onset_types2)
-                self.manual_mode_secondary = False
-                # Match visibility policy with primary (hide complex by default)
-                self.timeline_canvas2.visible_event_types = getattr(self.timeline_canvas, 'visible_event_types', ['twitch', 'active'])
+                total_frames2 = len(self.timeline_canvas2.motion_energy)
+                self.timeline_canvas2.total_frames = total_frames2
+
             self.timeline_canvas2.current_frame = getattr(self.timeline_canvas, 'current_frame', 0)
-            # Plot with available second annotations (if any)
             self.timeline_canvas2.plot_motion_energy_preserve_view(
-                self.timeline_canvas2.motion_energy,
+                getattr(self.timeline_canvas2, 'motion_energy', None),
                 getattr(self, 'onsets2', []),
                 getattr(self, 'onset_types2', {}),
-                self.timeline_canvas2.event_offsets,
+                getattr(self.timeline_canvas2, 'event_offsets', {}),
                 None
             )
+
             # Show second timeline and equalize space
             self.timeline_canvas2.show()
             self.timeline_splitter.setSizes([1, 1])
-            # Keep both timelines aligned on x when zooming via main controls
             self.reset_zoom_timeline()
+
             # Enable radio to select second input for annotation
             if hasattr(self, 'annotate_secondary_radio'):
                 self.annotate_secondary_radio.setEnabled(True)
+
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Failed to load second input: {str(e)}')
             import traceback
             traceback.print_exc()
+
+    def load_classifications_from_path(self, fname):
+        """Helper to load classifications from a known good CSV/XLSX path."""
+        if hasattr(self, 'annotate_secondary_radio'):
+            self.annotate_secondary_radio.setEnabled(True)
 
     def load_classifications_from_path(self, fname):
         """Helper to load classifications from a known good CSV/XLSX path."""
@@ -1425,6 +1358,7 @@ class MotionAnnotator(QWidget):
             reply = QMessageBox.question(self, "Overlap Detected", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply != QMessageBox.Yes:
                 return
+            
         # Check for total overlap and prompt BEFORE adding, exclude itself
         if target_secondary:
             # Use secondary store for total-overlap check
@@ -1458,8 +1392,10 @@ class MotionAnnotator(QWidget):
         # Sort onsets to maintain chronological order
         if target_secondary:
             self.onsets2 = sorted(self.onsets2)
+            self.filtered_onsets2 = self.onsets2.copy()
         else:
             self.onsets = sorted(self.onsets)
+            self.filtered_onsets = self.onsets.copy()
         # Store in undo stack
         self.undo_stack.append(('add_manual_2' if target_secondary else 'add_manual', onset, event_type, offset_inclusive))
         # Redraw timeline and refresh filtered onsets/counter immediately
@@ -1769,17 +1705,26 @@ class MotionAnnotator(QWidget):
         self.check_all_validated_and_show_firework()
         
     def goto_onset(self, idx):
+        # Choisir la timeline active
+        if getattr(self, "active_timeline_index", 1) == 1:
+            if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+                self.filtered_onsets = self.onsets.copy()
+            onsets_list = getattr(self, 'filtered_onsets', getattr(self, 'onsets', []))
+            timeline = self.timeline_canvas
+        else:
+            if not hasattr(self, 'filtered_onsets2') or not self.filtered_onsets2:
+                self.filtered_onsets2 = self.onsets2.copy()
+            onsets_list = getattr(self, 'filtered_onsets2', getattr(self, 'onsets2', []))
+            timeline = self.timeline_canvas2
         # Use filtered_onsets for navigation
-        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
-            self.filtered_onsets = self.onsets.copy()
-        if 0 <= idx < len(self.filtered_onsets):
+        if 0 <= idx < len(onsets_list):
             self.current_onset_idx = idx
-            onset_frame = self.filtered_onsets[idx]
+            onset_frame = onsets_list[idx]
             self.current_frame = onset_frame
             self.frame_slider.setValue(onset_frame)
             self.show_frame(onset_frame)
-            self.timeline_canvas.current_frame = onset_frame
-            self.timeline_canvas.update_timeline()
+            timeline.current_frame = onset_frame
+            timeline.update_timeline()
             # Only update spinbox if it's not currently being edited
             if not self.frame_spinbox.hasFocus():
                 self.frame_spinbox.blockSignals(True)
@@ -1791,13 +1736,21 @@ class MotionAnnotator(QWidget):
                 self.loop_btn.setEnabled(onset_frame in getattr(self, 'onsets', []))
             
     def prev_onset(self):
-        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
-            self.filtered_onsets = self.onsets.copy()
-        if not self.filtered_onsets:
+        if getattr(self, "active_timeline_index", 1) == 1:
+            if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+                self.filtered_onsets = self.onsets.copy()
+            onsets_list = getattr(self, 'filtered_onsets', getattr(self, 'onsets', []))
+        else:
+            if not hasattr(self, 'filtered_onsets2') or not self.filtered_onsets2:
+                self.filtered_onsets2 = self.onsets2.copy()
+            onsets_list = getattr(self, 'filtered_onsets2', getattr(self, 'onsets2', []))
+
+        if not onsets_list:
             return
+
         # Si on est au premier onset, aller au dernier (cyclique)
         if self.current_onset_idx == 0:
-            idx = len(self.filtered_onsets) - 1
+            idx = len(onsets_list) - 1
         else:
             idx = self.current_onset_idx - 1
         self.goto_onset(idx)
@@ -1899,22 +1852,37 @@ class MotionAnnotator(QWidget):
         self.setFocus()
 
     def next_onset(self):
-        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
-            self.filtered_onsets = self.onsets.copy()
-        if not self.filtered_onsets:
+        if getattr(self, "active_timeline_index", 1) == 1:
+            if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+                self.filtered_onsets = self.onsets.copy()
+            onsets_list = getattr(self, 'filtered_onsets', getattr(self, 'onsets', []))
+        else:
+            if not hasattr(self, 'filtered_onsets2') or not self.filtered_onsets2:
+                self.filtered_onsets2 = self.onsets2.copy()
+            onsets_list = getattr(self, 'filtered_onsets2', getattr(self, 'onsets2', []))
+
+        if not onsets_list:
             return
         # Aller à l'onset le plus proche strictement après la frame courante
         current_frame = self.current_frame
-        next_candidates = [o for o in self.filtered_onsets if o > current_frame]
+        next_candidates = [o for o in onsets_list if o > current_frame]
         if next_candidates:
-            idx = self.filtered_onsets.index(next_candidates[0])
+            idx = onsets_list.index(next_candidates[0])
         else:
             # Si aucun après, cyclique : aller au premier onset
             idx = 0
         self.goto_onset(idx)
 
     def update_onset_info(self):
-        if not hasattr(self, 'filtered_onsets') or not self.filtered_onsets:
+        
+        if self.active_timeline_index == 1:
+            onsets_list = getattr(self, 'filtered_onsets', getattr(self, 'onsets', []))
+            timeline = self.timeline_canvas
+        else:
+            onsets_list = getattr(self, 'filtered_onsets2', getattr(self, 'onsets2', []))
+            timeline = self.timeline_canvas2
+            
+        if not onsets_list:
             self.onset_info_label.setText("0/0\nNo onsets loaded")
             self.prev_onset_btn.setEnabled(False)
             self.next_onset_btn.setEnabled(False)
@@ -1922,6 +1890,11 @@ class MotionAnnotator(QWidget):
             self.reject_btn.setEnabled(False)
             self.edit_btn.setEnabled(False)
             return
+        
+         # S'assurer que current_onset_idx est dans les limites
+        if not hasattr(self, 'current_onset_idx') or self.current_onset_idx >= len(onsets_list):
+            self.current_onset_idx = len(onsets_list) - 1
+            
         # Réactive navigation si on a des onsets filtrés
         self.prev_onset_btn.setEnabled(True)
         self.next_onset_btn.setEnabled(True)
@@ -1930,15 +1903,15 @@ class MotionAnnotator(QWidget):
             self.accept_btn.setEnabled(True)
             self.reject_btn.setEnabled(True)
             self.edit_btn.setEnabled(True)
-        current_onset = self.filtered_onsets[self.current_onset_idx]
+        current_onset = onsets_list[self.current_onset_idx]
         onset_type = self.onset_types.get(current_onset, '')
         if onset_type not in ('active', 'twitch'):
             onset_type = ''
-        validation = self.timeline_canvas.onset_validations.get(current_onset, 'pending')
-        offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
+        validation = timeline.onset_validations.get(current_onset, 'pending')
+        offset = timeline.event_offsets.get(current_onset, current_onset)
         # For display: show offset+1 if offset > onset
         display_offset = offset + 1 if offset > current_onset else offset
-        info_text = f"Onset {self.current_onset_idx + 1}/{len(self.filtered_onsets)}: Frame {current_onset}"
+        info_text = f"Onset {self.current_onset_idx + 1}/{len(onsets_list)}: Frame {current_onset}"
         if offset != current_onset:
             info_text += f" to {display_offset}"
         if onset_type:
@@ -3607,6 +3580,14 @@ Average Score: {avg_score:.3f}
                 if all_non_pending:
                     self.auto_save_timer.stop()
                     self._auto_save_started = False
+                    
+                    
+    def start_mouse_timer(self):
+        """Lance un timer pour afficher la souris toutes les 20 minutes."""
+        self.mouse_timer = QTimer(self)
+        self.mouse_timer.timeout.connect(self.show_mouse_animation)  # Appelle l'animation
+        self.mouse_timer.start(20 * 60 * 1000)  # 20 minutes en millisecondes
+
 
     def check_total_overlap_and_prompt(self, new_onset, new_offset, exclude_onsets=None):
         """Check for totally overlapped events and prompt to reject them. Exclude the event(s) being edited/added if needed."""
