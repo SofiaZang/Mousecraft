@@ -19,10 +19,10 @@ For local installation (tried in Windows, to be tried in other os's)
 2.  Open an anaconda prompt / command prompt with conda for python 3 in the path.
 Navigate where you want the mousecraft to live.
 
-3. In the command prompt ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
+3. In git bash do  ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
 If this does not work, do the git clone in GitBash.
 
-4. Do ``cd Mousecraft`` to go into the root folder of mousecraft gui.
+4. In the anaconda prompt, doo ``cd Mousecraft`` to go into the root folder of mousecraft gui.
    
 5. Then create a new environment with ``conda env create -f environment.yml`` . In case creating this environment takes too long, try doing so, in miniconda prompt or else stay in anaconda prompt use conda forge like so: ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``
   
@@ -46,7 +46,8 @@ Everytime you want to use Mousecraft, you have to first run ``conda activate mou
 
 Friendly tip #2: Do not attempt to exit, it won't work :) 
 
-<img width="1905" height="1023" alt="mousecraft_gui" src="https://github.com/user-attachments/assets/7986e9d6-0633-4c6e-9bbf-e4147a85b8b1" />
+<img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
+
 
 ## Dependencies
 
@@ -114,8 +115,9 @@ Shows frame-by-frame playback and updates when navigating events.
 
 #### Load Video
 
-Button: Load Video
+Button: Load Video and Add a Camera
 Opens a file dialog to select a video file (.avi, .mp4, .mov, .tiff, etc.).
+You can load a second video and adjust both size. 
 
 #### Playback Controls
 
@@ -152,14 +154,13 @@ Tip: In case you have made some mistake and an event overlaps with another, an e
 #### Timeline Plot
 Displays the motion energy trace over frames.
 
-#### Load Motion Energy
-Loads a precomputed motion energy file (.csv, .xlsx, .npy).
-
-#### Load Classifications
-
-Loads precomputed event classifications (Active/Twitch events) for review and editing.
-
+#### Load An Input
+Loads a precomputed motion energy file (.csv, .xlsx, .npy) or a classification (Active/Twitch events) for review and editing.
 Annotated events appear as colored spans: Yellow: Active events, Purple: Twitch events, Green/Red/Orange dots: Validation status (Accepted, Rejected, Edited).
+
+#### Add A Second Input
+
+Do the same as Load An Input. The second input appears under the first one. 
 
 #### Zoom Controls
 🔍+ / 🔍-: Zoom in and out of the timeline.
@@ -191,6 +192,9 @@ Change Type: Changes an event’s type (e.g., Twitch → Active).
 
 #### Event Type:
 Dropdown to choose event type (Twitch, Active, Complex) for manual annotation.
+
+#### Add a Type : 
+Open a window. You can name the type and choose a color for this type. This tape will appears in every dropdown menu (event type of manual edition and onset navigation). 
 
 #### Onset / Offset Frame
 Spinboxes to manually enter frame numbers for onset and offset of new events.
