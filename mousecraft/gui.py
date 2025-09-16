@@ -1347,134 +1347,124 @@ class MotionAnnotator(QWidget):
         self._mouse_milestones_shown = set()
         
     def load_excel_classifications(self, fname):
-        """Load classifications from Excel/CSV format with SLEAP-like structure"""
+        """Load classifications from Excel/CSV with dynamic number of event types.
+        Expects pairs of columns <etype>_onset and <etype>_offset (optionally with _motion prefix).
+        """
         try:
             if fname.endswith('.csv'):
                 df = pd.read_csv(fname)
             else:
                 df = pd.read_excel(fname)
-                
-            print(f"Loaded CSV with shape: {df.shape}")
-            print(f"Columns: {list(df.columns)}")
-            
-            # Check if this is the expected format
-            expected_columns = ['frame_idx', 'motion_energy', 'active_motion_onset', 'active_motion_offset', 
-                               'twitch_onset', 'twitch_offset', 'complex_motion_onset', 'complex_motion_offset']
-            
-            missing_columns = [col for col in expected_columns if col not in df.columns]
-            if missing_columns:
-                QMessageBox.warning(self, "Warning", f"Missing columns: {missing_columns}\nExpected: {expected_columns}")
-                return
-                
-            # Load motion energy if not already loaded
-            if self.motion_energy is None:
-                self.motion_energy = df['motion_energy'].values.astype(np.float64)
-                self.prepare_motion_energy()
-            else:
-                # Check if motion energy lengths match
-                csv_length = len(df)
-                me_length = len(self.motion_energy)
-                if csv_length != me_length:
-                    QMessageBox.warning(self, "Warning", f"Motion energy length mismatch: CSV has {csv_length} frames, loaded motion energy has {me_length} frames")
-                    return
-                
-            # Extract events from onset/offset arrays
+
+            # Load or validate motion energy if present
+            if 'motion_energy' in df.columns:
+                if self.motion_energy is None:
+                    self.motion_energy = df['motion_energy'].values.astype(np.float64)
+                    self.prepare_motion_energy()
+                else:
+                    if len(df) != len(self.motion_energy):
+                        QMessageBox.warning(self, "Warning", f"Motion energy length mismatch: CSV has {len(df)} frames, loaded motion energy has {len(self.motion_energy)} frames")
+                        return
+
+            # Reset structures
             self.onsets = []
             self.onset_types = {}
             self.timeline_canvas.event_offsets = {}
             self.event_status = {}
-            
-            # Process active motion events
-            active_onsets = np.where(df['active_motion_onset'] == 1)[0]
-            active_offsets = np.where(df['active_motion_offset'] == 1)[0]
-            print(f"Found {len(active_onsets)} active onsets and {len(active_offsets)} active offsets")
-            print(f"Active onsets: {active_onsets[:10]}...")  # Show first 10
-            
-            for onset in active_onsets:
-                # Find corresponding offset
-                offset = self.find_corresponding_offset(onset, active_offsets)
-                offset = offset + 1 if offset > onset else onset  # Make offset inclusive (span onset to offset inclusively)
-                self.onsets.append(onset)
-                self.onset_types[onset] = 'active'
-                self.timeline_canvas.event_offsets[onset] = offset
-                self.event_status[onset] = 1  # default to accepted for now
-                self.original_onsets[onset] = onset
-                self.original_offsets[onset] = offset
-                print(f"Added active event: onset={onset}, offset={offset}")
-                
-            # Process twitch events
-            twitch_onsets = np.where(df['twitch_onset'] == 1)[0]
-            twitch_offsets = np.where(df['twitch_offset'] == 1)[0]
-            print(f"Found {len(twitch_onsets)} twitch onsets and {len(twitch_offsets)} twitch offsets")
-            print(f"Twitch onsets: {twitch_onsets[:10]}...")  # Show first 10
-            
-            for onset in twitch_onsets:
-                # Find corresponding offset
-                offset = self.find_corresponding_offset(onset, twitch_offsets)
-                offset = offset + 1 if offset > onset else onset
-                self.onsets.append(onset)
-                self.onset_types[onset] = 'twitch'
-                self.timeline_canvas.event_offsets[onset] = offset
-                self.event_status[onset] = 1
-                self.original_onsets[onset] = onset
-                self.original_offsets[onset] = offset
-                print(f"Added twitch event: onset={onset}, offset={offset}")
-                
-            # Process complex motion events
-            complex_onsets = np.where(df['complex_motion_onset'] == 1)[0]
-            complex_offsets = np.where(df['complex_motion_offset'] == 1)[0]
-            print(f"Found {len(complex_onsets)} complex onsets and {len(complex_offsets)} complex offsets")
-            
-            for onset in complex_onsets:
-                # Find corresponding offset
-                offset = self.find_corresponding_offset(onset, complex_offsets)
-                offset = offset + 1 if offset > onset else onset
-                self.onsets.append(onset)
-                self.onset_types[onset] = 'complex'
-                self.timeline_canvas.event_offsets[onset] = offset
-                self.event_status[onset] = 1
-                self.original_onsets[onset] = onset
-                self.original_offsets[onset] = offset
-                
-            # Sort onsets
+
+            # Discover dynamic etypes from *_onset/*_offset pairs
+            cols = set(df.columns)
+            base_names = []
+            for col in cols:
+                if col.endswith('_onset') and col[:-6] + '_offset' in cols:
+                    base_names.append(col[:-6])
+
+            # Normalize etype name: remove trailing _motion if present
+            def normalize(base: str) -> str:
+                et = base
+                if et.endswith('_motion'):
+                    et = et[:-7]
+                return et.lower().strip()
+
+            discovered_types = []
+            for base in base_names:
+                onset_col = base + '_onset'
+                offset_col = base + '_offset'
+                etype = normalize(base)
+                discovered_types.append(etype)
+
+                # Register new types and assign colors
+                if etype not in self.available_event_types:
+                    self.available_event_types.append(etype)
+                if etype not in self.event_type_colors:
+                    used = {c.lower() for c in self.event_type_colors.values()}
+                    picked = None
+                    for c in self._auto_palette:
+                        if c.lower() not in used:
+                            picked = c
+                            break
+                    if picked is None:
+                        picked = f"#{hash(etype) & 0xFFFFFF:06x}"
+                    self.event_type_colors[etype] = picked
+
+                et_onsets = np.where(df[onset_col] == 1)[0]
+                et_offsets = np.where(df[offset_col] == 1)[0]
+                for onset in et_onsets:
+                    offset = self.find_corresponding_offset(onset, et_offsets)
+                    offset = offset + 1 if offset > onset else onset
+                    self.onsets.append(onset)
+                    self.onset_types[onset] = etype
+                    self.timeline_canvas.event_offsets[onset] = offset
+                    self.event_status[onset] = 1
+                    self.original_onsets[onset] = onset
+                    self.original_offsets[onset] = offset
+
+            # Sort
             self.onsets = sorted(self.onsets)
             self.current_onset_idx = 0
-            
-            print(f"Total events loaded: {len(self.onsets)}")
-            print(f"Event types: {set(self.onset_types.values())}")
-            print(f"Onset range: {min(self.onsets) if self.onsets else 'N/A'} to {max(self.onsets) if self.onsets else 'N/A'}")
-            print(f"Motion energy length: {len(self.motion_energy)}")
-            
-            # Check for out-of-range onsets
-            if self.onsets:
-                max_onset = max(self.onsets)
-                if max_onset >= len(self.motion_energy):
-                    QMessageBox.warning(self, "Warning", f"Some onsets ({max_onset}) are beyond motion energy length ({len(self.motion_energy)})")
-                    # Filter out out-of-range onsets
-                    valid_onsets = [onset for onset in self.onsets if onset < len(self.motion_energy)]
-                    self.onsets = valid_onsets
-                    print(f"Filtered to {len(self.onsets)} valid onsets")
-            
-            # Create curated events structure
-            self.curated_events = {}
-            for onset in self.onsets:
-                event_type = self.onset_types[onset]
-                if event_type not in self.curated_events:
-                    self.curated_events[event_type] = []
-                self.curated_events[event_type].append([onset, 1])  # 1 indicates detected by algorithm
-                
+
+            # Update UI combos with discovered types
+            if hasattr(self, 'event_type_combo'):
+                placeholder = self.event_type_combo.itemText(0) if self.event_type_combo.count() > 0 else "Select type…"
+                self.event_type_combo.clear()
+                self.event_type_combo.addItem(placeholder)
+                self.event_type_combo.addItems(self.available_event_types)
+                self.event_type_combo.setCurrentIndex(0)
+            if hasattr(self, 'onset_filter_combo'):
+                current_idx = self.onset_filter_combo.currentIndex() if self.onset_filter_combo.count() > 0 else 0
+                self.onset_filter_combo.clear()
+                self.onset_filter_combo.addItems(["All"] + [t.capitalize() for t in self.available_event_types])
+                if current_idx < self.onset_filter_combo.count():
+                    self.onset_filter_combo.setCurrentIndex(current_idx)
+            if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
+                self.change_type_dropdown.clear()
+                self.change_type_dropdown.addItems(self.available_event_types)
+
+            # Propagate colors and visibility to canvases
+            if hasattr(self, 'timeline_canvas'):
+                self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+                if getattr(self.timeline_canvas, 'visible_event_types', None) is not None:
+                    for t in self.available_event_types:
+                        if t not in self.timeline_canvas.visible_event_types:
+                            self.timeline_canvas.visible_event_types.append(t)
+            if hasattr(self, 'timeline_canvas2'):
+                self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+                if getattr(self.timeline_canvas2, 'visible_event_types', None) is not None:
+                    for t in self.available_event_types:
+                        if t not in self.timeline_canvas2.visible_event_types:
+                            self.timeline_canvas2.visible_event_types.append(t)
+
             # Update timeline
             self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
-            
+
             # Go to first onset
             if self.onsets:
                 self.goto_onset(0)
-                
+
             QMessageBox.information(self, "Success", f"Loaded {len(self.onsets)} events from {fname}")
-            
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load CSV file: {str(e)}")
-            print(f"Error loading CSV: {e}")
             import traceback
             traceback.print_exc()
         
