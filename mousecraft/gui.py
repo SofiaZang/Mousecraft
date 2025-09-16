@@ -344,6 +344,12 @@ class MotionAnnotator(QWidget):
             "complex": "cyan",
         }
 
+        # Palette de couleurs pour nouveaux types (cycle stable)
+        self._auto_palette = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        ]
+
         self.init_ui()
         self.setup_timer()
         self.unsaved_changes = False  # Track unsaved changes
@@ -504,10 +510,27 @@ class MotionAnnotator(QWidget):
         # Remove: self.frame_info_label = QLabel("Frame: 0 / 0")
         # left_panel.addWidget(self.frame_info_label)
 
-        # Add onset status bar below video
-        self.onset_status_label = QLabel("No onset at current frame")
-        self.onset_status_label.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
-        left_panel.addWidget(self.onset_status_label)
+        # Add dual onset status bar below video (left = input 1, right = input 2)
+        status_container = QWidget()
+        status_layout = QHBoxLayout()
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(0)
+        self.onset_status_label_left = QLabel("Frame 0: No onset")
+        self.onset_status_label_left.setAlignment(Qt.AlignCenter)
+        self.onset_status_label_left.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setLineWidth(1)
+        self.onset_status_label_right = QLabel("Frame 0: No onset")
+        self.onset_status_label_right.setAlignment(Qt.AlignCenter)
+        self.onset_status_label_right.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
+        status_layout.addWidget(self.onset_status_label_left)
+        status_layout.addWidget(separator)
+        status_layout.addWidget(self.onset_status_label_right)
+        status_layout.setStretch(0, 1)
+        status_layout.setStretch(2, 1)
+        status_container.setLayout(status_layout)
+        left_panel.addWidget(status_container)
 
         # Manual event addition
         manual_event_group = QGroupBox("Manual Event Addition")
@@ -1016,14 +1039,40 @@ class MotionAnnotator(QWidget):
                 classified_loaded = False
 
             elif lower.endswith('.json'):
-                # JSON classifications
+                # JSON classifications (events only, no energy)
                 self.onsets2, self.onset_types2, self.timeline_canvas2.event_offsets = self.load_json_classifications(fname)
+                # Ensure motion energy exists for secondary; fallback to primary length or inferred length
+                if getattr(self.timeline_canvas2, 'motion_energy', None) is None:
+                    try:
+                        if getattr(self, 'motion_energy', None) is not None:
+                            length = len(self.motion_energy)
+                        else:
+                            max_frame = 0
+                            if self.onsets2:
+                                max_frame = max(max_frame, max(self.onsets2))
+                            if getattr(self.timeline_canvas2, 'event_offsets', {}):
+                                max_frame = max(max_frame, max(self.timeline_canvas2.event_offsets.values()))
+                            length = max_frame + 1 if max_frame > 0 else 1000
+                        self.timeline_canvas2.motion_energy = np.zeros(length, dtype=float)
+                    except Exception:
+                        pass
                 classified_loaded = True
 
             elif lower.endswith('.csv') or lower.endswith('.xlsx'):
                 # Try as classifications
                 try:
+                    # Load as classifications for secondary
                     self.onsets2, self.onset_types2, self.timeline_canvas2.event_offsets = self.load_classifications_from_path(fname)
+                    # Also extract motion energy for secondary if available
+                    try:
+                        if lower.endswith('.csv'):
+                            df2 = pd.read_csv(fname)
+                        else:
+                            df2 = pd.read_excel(fname)
+                        if 'motion_energy' in df2.columns:
+                            self.timeline_canvas2.motion_energy = df2['motion_energy'].values.astype(np.float64)
+                    except Exception:
+                        pass
                     classified_loaded = True
                 except Exception:
                     # fallback: motion-only
@@ -1064,12 +1113,22 @@ class MotionAnnotator(QWidget):
                 self.timeline_canvas2.event_offsets = {}
                 self.timeline_canvas2.onset_validations = {}
             else:
-                total_frames2 = len(self.timeline_canvas2.motion_energy)
-                self.timeline_canvas2.total_frames = total_frames2
+                # Ensure total_frames and motion_energy are set for secondary
+                if getattr(self.timeline_canvas2, 'motion_energy', None) is None:
+                    # Fallback to primary length
+                    default_len = len(self.motion_energy) if getattr(self, 'motion_energy', None) is not None else 1000
+                    self.timeline_canvas2.motion_energy = np.zeros(default_len, dtype=float)
+                self.timeline_canvas2.total_frames = len(self.timeline_canvas2.motion_energy)
 
             self.timeline_canvas2.current_frame = getattr(self.timeline_canvas, 'current_frame', 0)
-            self.timeline_canvas2.plot_motion_energy_preserve_view(
-                getattr(self.timeline_canvas2, 'motion_energy', None),
+            # For initial render of input 2, do NOT preserve old view; reset to full extent
+            # Ensure motion_energy exists
+            if getattr(self.timeline_canvas2, 'motion_energy', None) is None:
+                default_len = len(self.motion_energy) if getattr(self, 'motion_energy', None) is not None else 1000
+                self.timeline_canvas2.motion_energy = np.zeros(default_len, dtype=float)
+            self.timeline_canvas2.total_frames = len(self.timeline_canvas2.motion_energy)
+            self.timeline_canvas2.plot_motion_energy(
+                self.timeline_canvas2.motion_energy,
                 getattr(self, 'onsets2', []),
                 getattr(self, 'onset_types2', {}),
                 getattr(self.timeline_canvas2, 'event_offsets', {}),
@@ -1079,6 +1138,7 @@ class MotionAnnotator(QWidget):
             # Show second timeline and equalize space
             self.timeline_canvas2.show()
             self.timeline_splitter.setSizes([1, 1])
+            # Force both timelines to full-extent view and synchronize xlim
             self.reset_zoom_timeline()
 
             # Enable radio to select second input for annotation
@@ -1112,7 +1172,103 @@ class MotionAnnotator(QWidget):
         elif {'active_motion_onset', 'active_motion_offset', 'twitch_onset', 'twitch_offset'}.issubset(cols):
             self.load_excel_classifications(fname)
         else:
-            raise ValueError('Unrecognized classification table schema')
+            # Generic dynamic schema: each non-motion_energy, non-score/status column is treated as a binary mask
+            df = loaded_df
+            if 'motion_energy' in df.columns and self.motion_energy is None:
+                self.motion_energy = df['motion_energy'].values.astype(np.float64)
+                self.prepare_motion_energy()
+            self.onsets = []
+            self.onset_types = {}
+            self.timeline_canvas.event_offsets = {}
+            self.event_status = {}
+            self.curated_events = {}
+            self.timeline_canvas.onset_validations = {}
+            # Identify candidate event columns
+            ignore_cols = {'motion_energy', 'status', 'score', 'frame_idx'}
+            candidate_cols = [c for c in df.columns if c not in ignore_cols]
+            for col in candidate_cols:
+                etype = str(col).lower().strip()
+                if etype not in self.available_event_types:
+                    self.available_event_types.append(etype)
+                if etype not in self.event_type_colors:
+                    used = {c.lower() for c in self.event_type_colors.values()}
+                    picked = None
+                    for c in self._auto_palette:
+                        if c.lower() not in used:
+                            picked = c
+                            break
+                    if picked is None:
+                        picked = f"#{hash(etype) & 0xFFFFFF:06x}"
+                    self.event_type_colors[etype] = picked
+                arr = df[col].astype(int).values
+                in_event = False
+                for i, val in enumerate(arr):
+                    if val == 1 and not in_event:
+                        onset = i
+                        in_event = True
+                    elif (val == 0 or i == len(arr) - 1) and in_event:
+                        offset = i - 1 if val == 0 else i
+                        if onset not in self.onsets:
+                            self.onsets.append(onset)
+                            self.onset_types[onset] = etype
+                            self.timeline_canvas.event_offsets[onset] = offset
+                        # Optional status/score if present
+                        status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
+                        score = df.at[onset, 'score'] if 'score' in df.columns else 0
+                        if status == 'edited':
+                            gui_status = 'edited'
+                            gui_score = 1 if float(score) == 1 else 0.5
+                        elif status == 'accepted':
+                            gui_status = 'accepted'
+                            gui_score = 1
+                        elif status == 'rejected':
+                            gui_status = 'rejected'
+                            gui_score = -1
+                        elif status == 'manually added':
+                            gui_status = 'manually added'
+                            gui_score = 0
+                        else:
+                            gui_status = 'pending'
+                            gui_score = 0
+                        self.timeline_canvas.onset_validations[onset] = gui_status
+                        self.event_status[onset] = gui_score
+                        if etype not in self.curated_events:
+                            self.curated_events[etype] = []
+                        self.curated_events[etype].append([onset, offset, 1])
+                        in_event = False
+            self.onsets = sorted(set(self.onsets))
+            # Propagate UI and canvas settings
+            if hasattr(self, 'event_type_combo'):
+                placeholder = self.event_type_combo.itemText(0) if self.event_type_combo.count() > 0 else "Select type…"
+                self.event_type_combo.clear()
+                self.event_type_combo.addItem(placeholder)
+                self.event_type_combo.addItems(self.available_event_types)
+                self.event_type_combo.setCurrentIndex(0)
+            if hasattr(self, 'onset_filter_combo'):
+                current_idx = self.onset_filter_combo.currentIndex() if self.onset_filter_combo.count() > 0 else 0
+                self.onset_filter_combo.clear()
+                self.onset_filter_combo.addItems(["All"] + [t.capitalize() for t in self.available_event_types])
+                if current_idx < self.onset_filter_combo.count():
+                    self.onset_filter_combo.setCurrentIndex(current_idx)
+            if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
+                self.change_type_dropdown.clear()
+                self.change_type_dropdown.addItems(self.available_event_types)
+            if hasattr(self, 'timeline_canvas'):
+                self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+                if getattr(self.timeline_canvas, 'visible_event_types', None) is not None:
+                    for t in self.available_event_types:
+                        if t not in self.timeline_canvas.visible_event_types:
+                            self.timeline_canvas.visible_event_types.append(t)
+            if hasattr(self, 'timeline_canvas2'):
+                self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+                if getattr(self.timeline_canvas2, 'visible_event_types', None) is not None:
+                    for t in self.available_event_types:
+                        if t not in self.timeline_canvas2.visible_event_types:
+                            self.timeline_canvas2.visible_event_types.append(t)
+            # Update timeline
+            self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+            if self.onsets:
+                self.goto_onset(0)
         
     def load_json_classifications(self, fname):
         """Load classifications from JSON format"""
@@ -1127,9 +1283,51 @@ class MotionAnnotator(QWidget):
         self.onset_types = {}
         
         for event_type, events in self.curated_events.items():
+            etype = str(event_type).lower().strip()
+            # Register unseen types: add to available list, assign color, and propagate to canvases
+            if etype not in self.available_event_types:
+                self.available_event_types.append(etype)
+                # Assign a color from palette if not present
+                if etype not in self.event_type_colors:
+                    # Pick next palette color not already used
+                    used = {c.lower() for c in self.event_type_colors.values()}
+                    picked = None
+                    for c in self._auto_palette:
+                        if c.lower() not in used:
+                            picked = c
+                            break
+                    if picked is None:
+                        picked = f"#{hash(etype) & 0xFFFFFF:06x}"
+                    self.event_type_colors[etype] = picked
+                # Update UI combos if available
+                if hasattr(self, 'event_type_combo'):
+                    current_placeholder = self.event_type_combo.itemText(0) if self.event_type_combo.count() > 0 else "Select type…"
+                    self.event_type_combo.clear()
+                    self.event_type_combo.addItem(current_placeholder)
+                    self.event_type_combo.addItems(self.available_event_types)
+                    self.event_type_combo.setCurrentIndex(0)
+                if hasattr(self, 'onset_filter_combo'):
+                    current_idx = self.onset_filter_combo.currentIndex() if self.onset_filter_combo.count() > 0 else 0
+                    self.onset_filter_combo.clear()
+                    self.onset_filter_combo.addItems(["All"] + [t.capitalize() for t in self.available_event_types])
+                    if current_idx < self.onset_filter_combo.count():
+                        self.onset_filter_combo.setCurrentIndex(current_idx)
+                if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
+                    self.change_type_dropdown.clear()
+                    self.change_type_dropdown.addItems(self.available_event_types)
+                # Propagate colors and visibility to canvases
+                if hasattr(self, 'timeline_canvas'):
+                    self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+                    if getattr(self.timeline_canvas, 'visible_event_types', None) is not None and etype not in self.timeline_canvas.visible_event_types:
+                        self.timeline_canvas.visible_event_types.append(etype)
+                if hasattr(self, 'timeline_canvas2'):
+                    self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+                    if getattr(self.timeline_canvas2, 'visible_event_types', None) is not None and etype not in self.timeline_canvas2.visible_event_types:
+                        self.timeline_canvas2.visible_event_types.append(etype)
+
             for onset, _ in events:
                 self.onsets.append(onset)
-                self.onset_types[onset] = event_type
+                self.onset_types[onset] = etype
                 self.original_onsets[onset] = onset  # Track original
                 self.original_offsets[onset] = onset  # Track original offset
                 
@@ -1654,11 +1852,24 @@ class MotionAnnotator(QWidget):
         # Set primary as active when interacting with first timeline
         self.active_timeline_index = 1
         self._sync_frame_all(frame)
+        # Keep axes aligned when interacting with primary
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+            try:
+                xlim = self.timeline_canvas.ax.get_xlim()
+                self.timeline_canvas2.ax.set_xlim(xlim)
+            except Exception:
+                pass
 
     def timeline_frame_changed_secondary(self, frame):
         # Set secondary as active when interacting with second timeline
         self.active_timeline_index = 2
         self._sync_frame_all(frame)
+        # Keep both timelines horizontally aligned when moving on secondary
+        try:
+            xlim = self.timeline_canvas.ax.get_xlim()
+            self.timeline_canvas2.ax.set_xlim(xlim)
+        except Exception:
+            pass
 
     def update_frame_info(self):
         # Update spinbox and total frames label
@@ -2537,57 +2748,68 @@ Average Score: {avg_score:.3f}
 
     def zoom_in_timeline(self):
         # Zoom in on the x-axis by a factor of 2, centered on current frame
-        ax = self.timeline_canvas.ax
-        xlim = ax.get_xlim()
-        center = self.current_frame  # Use self.current_frame instead of timeline_canvas.current_frame
-        width = xlim[1] - xlim[0]
+        # Use shared extent across both inputs so both can zoom consistently
+        ax1 = self.timeline_canvas.ax
+        xlim = ax1.get_xlim()
+        center = self.current_frame
+        width = max(1, xlim[1] - xlim[0])
         new_width = width / 2
-        new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
-        ax.set_xlim(new_xlim)
+        total1 = getattr(self.timeline_canvas, 'total_frames', 0)
+        total2 = getattr(self.timeline_canvas2, 'total_frames', 0) if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible() else 0
+        xmax = max(total1, total2, 1000)
+        new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, xmax))
+        # Apply to both timelines
+        ax1.set_xlim(new_xlim)
         self.timeline_canvas.draw()
-        self.timeline_canvas.flush_events()  # Force immediate update
-        # Keep second timeline xlim in sync if visible
+        self.timeline_canvas.flush_events()
         if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
-            try:
-                self.timeline_canvas2.ax.set_xlim(new_xlim)
-                self.timeline_canvas2.draw()
-            except Exception:
-                pass
+            ax2 = self.timeline_canvas2.ax
+            ax2.set_xlim(new_xlim)
+            self.timeline_canvas2.draw()
         
     def zoom_out_timeline(self):
         # Zoom out on the x-axis by a factor of 2, centered on current frame
-        ax = self.timeline_canvas.ax
-        xlim = ax.get_xlim()
-        center = self.current_frame  # Use self.current_frame instead of timeline_canvas.current_frame
-        width = xlim[1] - xlim[0]
+        # Use shared extent across both inputs so both can zoom consistently
+        ax1 = self.timeline_canvas.ax
+        xlim = ax1.get_xlim()
+        center = self.current_frame
+        width = max(1, xlim[1] - xlim[0])
         new_width = width * 2
-        new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.timeline_canvas.total_frames))
-        ax.set_xlim(new_xlim)
+        total1 = getattr(self.timeline_canvas, 'total_frames', 0)
+        total2 = getattr(self.timeline_canvas2, 'total_frames', 0) if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible() else 0
+        xmax = max(total1, total2, 1000)
+        new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, xmax))
+        # Apply to both timelines
+        ax1.set_xlim(new_xlim)
         self.timeline_canvas.draw()
-        self.timeline_canvas.flush_events()  # Force immediate update
-        # Keep second timeline xlim in sync if visible
-        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
-            try:
-                self.timeline_canvas2.ax.set_xlim(new_xlim)
-                self.timeline_canvas2.draw()
-            except Exception:
-                pass
-
-    def reset_zoom_timeline(self):
-        # Reset the x and y axis to initial state (full view)
-        ax = self.timeline_canvas.ax
-        ax.set_xlim(0, max(self.timeline_canvas.total_frames, 1000))
-        if hasattr(self, 'motion_energy') and self.motion_energy is not None:
-            ax.set_ylim(0, max(self.motion_energy) * 1.2)
-        else:
-            ax.set_ylim(0, 1.2)
-        self.timeline_canvas.draw()
-        self.timeline_canvas.flush_events()  # Force immediate update
-        # Also reset the second timeline if present
+        self.timeline_canvas.flush_events()
         if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
             ax2 = self.timeline_canvas2.ax
-            ax2.set_xlim(0, max(getattr(self.timeline_canvas2, 'total_frames', 0), 1000))
-            if hasattr(self.timeline_canvas2, 'motion_energy') and self.timeline_canvas2.motion_energy is not None:
+            ax2.set_xlim(new_xlim)
+            self.timeline_canvas2.draw()
+
+    def reset_zoom_timeline(self):
+        # Reset both timelines to show their full extents and keep x-axes aligned
+        # Compute global xmax across both inputs (fallback to 1000 if empty)
+        total1 = getattr(self.timeline_canvas, 'total_frames', 0)
+        total2 = getattr(self.timeline_canvas2, 'total_frames', 0) if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible() else 0
+        xmax = max(total1, total2, 1000)
+
+        # Primary timeline
+        ax1 = self.timeline_canvas.ax
+        ax1.set_xlim(0, xmax)
+        if getattr(self, 'motion_energy', None) is not None and len(self.motion_energy) > 0:
+            ax1.set_ylim(0, max(self.motion_energy) * 1.2)
+        else:
+            ax1.set_ylim(0, 1.2)
+        self.timeline_canvas.draw()
+        self.timeline_canvas.flush_events()
+
+        # Secondary timeline
+        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+            ax2 = self.timeline_canvas2.ax
+            ax2.set_xlim(0, xmax)
+            if getattr(self.timeline_canvas2, 'motion_energy', None) is not None and len(self.timeline_canvas2.motion_energy) > 0:
                 ax2.set_ylim(0, max(self.timeline_canvas2.motion_energy) * 1.2)
             else:
                 ax2.set_ylim(0, 1.2)
@@ -2624,36 +2846,51 @@ Average Score: {avg_score:.3f}
             self.show_frame(self.current_frame)
 
     def update_onset_status(self):
-        """Update the onset status bar with current frame info"""
-        onset_type = self.onset_types.get(self.current_frame, None)
-        # Check if the current frame is an offset (exclusive)
-        is_offset = False
-        for onset, offset in self.timeline_canvas.event_offsets.items():
-            if offset + 1 == self.current_frame:
-                is_offset = True
-                break
-        
-        # Check if we're in either of the two edit modes
-        is_editing = (hasattr(self, 'edit_widget') and self.edit_widget.isVisible()) or \
-                     (hasattr(self, 'offset_edit_widget') and self.offset_edit_widget.isVisible())
-        
-        if onset_type:
-            self.onset_status_label.setText(f"Frame {self.current_frame}: {onset_type.upper()} ONSET")
-            # Color code based on onset type
-            if onset_type == 'twitch':
-                self.onset_status_label.setStyleSheet("background-color: purple; color: white; padding: 5px; border: 1px solid gray; font-weight: bold;")
-            elif onset_type == 'active':
-                self.onset_status_label.setStyleSheet("background-color: yellow; color: black; padding: 5px; border: 1px solid gray; font-weight: bold;")
-        elif is_offset:
-            # Display the offset in red
-            if is_editing:
-                self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET (EDITING)</span>")
+        """Update the dual onset status bars for input 1 (left) and input 2 (right)"""
+        # Helper to compute status text and style for a given input's data
+        def compute_status(for_input_2=False):
+            if for_input_2:
+                onset_types = getattr(self, 'onset_types2', {})
+                event_offsets = getattr(self.timeline_canvas2, 'event_offsets', {}) if hasattr(self, 'timeline_canvas2') else {}
             else:
-                self.onset_status_label.setText(f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET</span>")
-            self.onset_status_label.setStyleSheet("background-color: #ffcccc; color: #ff4444; padding: 5px; border: 1px solid gray; font-weight: bold;")
-        else:
-            self.onset_status_label.setText(f"Frame {self.current_frame}: No onset")
-            self.onset_status_label.setStyleSheet("background-color: lightgray; padding: 5px; border: 1px solid gray;")
+                onset_types = getattr(self, 'onset_types', {})
+                event_offsets = getattr(self.timeline_canvas, 'event_offsets', {}) if hasattr(self, 'timeline_canvas') else {}
+
+            onset_type = onset_types.get(self.current_frame, None)
+            is_offset = any((offset + 1) == self.current_frame for _, offset in event_offsets.items())
+            is_editing = (hasattr(self, 'edit_widget') and self.edit_widget.isVisible()) or \
+                         (hasattr(self, 'offset_edit_widget') and self.offset_edit_widget.isVisible())
+
+            if onset_type:
+                text = f"Frame {self.current_frame}: {onset_type.upper()} ONSET"
+                if onset_type == 'twitch':
+                    style = "background-color: purple; color: white; padding: 5px; border: 1px solid gray; font-weight: bold;"
+                elif onset_type == 'active':
+                    style = "background-color: yellow; color: black; padding: 5px; border: 1px solid gray; font-weight: bold;"
+                else:
+                    style = "background-color: lightgray; padding: 5px; border: 1px solid gray;"
+            elif is_offset:
+                text = f"Frame {self.current_frame}: <span style='color:#ff4444;font-weight:bold'>OFFSET{' (EDITING)' if is_editing else ''}</span>"
+                style = "background-color: #ffcccc; color: #ff4444; padding: 5px; border: 1px solid gray; font-weight: bold;"
+            else:
+                text = f"Frame {self.current_frame}: No onset"
+                style = "background-color: lightgray; padding: 5px; border: 1px solid gray;"
+            return text, style
+
+        # Compute both sides
+        left_text, left_style = compute_status(for_input_2=False)
+        right_text, right_style = compute_status(for_input_2=True)
+
+        # Update labels if they exist (fallback to legacy single label if not migrated)
+        if hasattr(self, 'onset_status_label_left') and hasattr(self, 'onset_status_label_right'):
+            self.onset_status_label_left.setText(left_text)
+            self.onset_status_label_left.setStyleSheet(left_style)
+            self.onset_status_label_right.setText(right_text)
+            self.onset_status_label_right.setStyleSheet(right_style)
+        elif hasattr(self, 'onset_status_label'):
+            # Backward compatibility: show left status
+            self.onset_status_label.setText(left_text)
+            self.onset_status_label.setStyleSheet(left_style)
         # Keep loop button in sync whenever status updates
         if hasattr(self, 'loop_btn'):
             self.loop_btn.setEnabled(self.current_frame in getattr(self, 'onsets', []))
@@ -3749,9 +3986,23 @@ Average Score: {avg_score:.3f}
             if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
                 self.change_type_dropdown.clear()
                 self.change_type_dropdown.addItems(self.available_event_types)
-            # Also propagate mapping to timeline canvas
-            if hasattr(self, 'timeline_canvas'):
+            # Also propagate mapping and visibility to both timelines
+            if hasattr(self, 'timeline_canvas') and self.timeline_canvas is not None:
                 self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+                try:
+                    if hasattr(self.timeline_canvas, 'visible_event_types') and self.timeline_canvas.visible_event_types is not None:
+                        if key not in self.timeline_canvas.visible_event_types:
+                            self.timeline_canvas.visible_event_types.append(key)
+                except Exception:
+                    pass
+            if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2 is not None:
+                self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+                try:
+                    if hasattr(self.timeline_canvas2, 'visible_event_types') and self.timeline_canvas2.visible_event_types is not None:
+                        if key not in self.timeline_canvas2.visible_event_types:
+                            self.timeline_canvas2.visible_event_types.append(key)
+                except Exception:
+                    pass
             dialog.accept()
             self.redraw()
 
