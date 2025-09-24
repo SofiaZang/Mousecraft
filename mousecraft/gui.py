@@ -2,6 +2,8 @@ import sys
 import cv2
 import json
 import pandas as pd
+import os
+from PyQt5.QtWidgets import QMessageBox, QFileDialog
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -11,7 +13,8 @@ from PyQt5.QtWidgets import (
     QDialog, QFrame, QSpacerItem, QColorDialog
 )
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QIntValidator, QIcon, QFont, QFontDatabase, QMovie
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize, QSettings
+from PyQt5.QtCore import QProcess
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -92,6 +95,7 @@ class DraggableTimeline(FigureCanvas):
             pass
         self.timeline_line = self.ax.axvline(self.current_frame, color='red', linewidth=2, alpha=0.8)
         self.draw()
+        
         
     def plot_motion_energy(self, motion_energy, onsets=None, onset_types=None, event_offsets=None, event_status=None):
         import numpy as np
@@ -420,11 +424,23 @@ class MotionAnnotator(QWidget):
         video_layout = QGridLayout()
         self.load_video_btn = QPushButton("Load Video")
         self.load_video_btn.clicked.connect(self.load_video)
-        video_layout.addWidget(self.load_video_btn, 0, 0, 1, 2)
+        video_layout.addWidget(self.load_video_btn, 0, 0)
         # Add a camera button
         self.add_camera_btn = QPushButton("Add a camera")
         self.add_camera_btn.clicked.connect(self.add_camera)
-        video_layout.addWidget(self.add_camera_btn, 0, 2, 1, 2)
+        video_layout.addWidget(self.add_camera_btn, 0, 1)
+        
+        # Compute motion energy by running the analysis script
+        self.compute_motion_energy_btn = QPushButton("Compute a ME")
+        self.compute_motion_energy_btn.clicked.connect(self.run_state_detection_script)
+        video_layout.addWidget(self.compute_motion_energy_btn, 0, 2)
+        # Initially disabled until a motion energy file is selected/loaded
+        self.compute_motion_energy_btn.setEnabled(False)
+
+        # Rendre les trois boutons de même taille
+        self.load_video_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.add_camera_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.compute_motion_energy_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         # Création des boutons de contrôle vidéo
         self.play_btn = QPushButton("Play ▶️")
@@ -828,6 +844,298 @@ class MotionAnnotator(QWidget):
         self.loop_start_frame = None
         self.loop_end_frame = None
         
+    def run_notebook(self, motion_energy_file):
+        try:
+            # Chemin absolu vers le notebook
+            notebook_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "demo", "building_state_and_twitch_detection_avg.ipynb")
+            )
+            if not os.path.exists(notebook_path):
+                QMessageBox.critical(self, "Error", f"Notebook not found:\n{notebook_path}")
+                return "Notebook not found."
+            
+            save_dir = os.path.dirname(os.path.abspath(motion_energy_file))
+            os.makedirs(save_dir, exist_ok=True)
+
+            # Ouvrir et exécuter le notebook
+            with open(notebook_path, "r", encoding="utf-8") as f:
+                nb = nbformat.read(f, as_version=4)
+
+            ep = ExecutePreprocessor(timeout=600, kernel_name="python3")
+            ep.preprocess(nb, {"metadata": {"path": os.path.dirname(notebook_path)}})
+
+            return f"Notebook executed successfully with {motion_energy_file}"
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to execute notebook:\n{e}")
+            return f"Execution failed: {e}"
+
+    def select_motion_energy(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Motion Energy File", "", "Numpy files (*.npy);;JSON files (*.json);;All Files (*)", options=options)
+        
+        if file_path:
+            # Store path to enable compute button and use it later
+            self.motion_energy_path = file_path
+            self.compute_motion_energy_btn.setEnabled(True)
+            result_message = self.run_notebook(file_path)
+            QMessageBox.information(self, "Success", result_message)
+        else:
+            QMessageBox.warning(self, "No File Selected", "Please select a motion energy file.")
+
+    def run_state_detection_script(self):
+        """Run the demo/building_state_and_twitch_detection_avg.py script as-is via subprocess.
+        This preserves the current behavior and parameters defined inside the script.
+        """
+        try:
+            import subprocess, sys
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QTextEdit
+            # Resolve script path relative to this file
+            script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "demo", "building_state_and_twitch_detection_avg.py"))
+            if not os.path.exists(script_path):
+                QMessageBox.critical(self, "Error", f"Analysis script not found:\n{script_path}")
+                return
+
+            # Run the script with Python interpreter; set cwd to the demo folder
+            cwd = os.path.dirname(script_path)
+            # If a motion energy path has been selected/loaded, pass it to the script
+            args = [sys.executable, script_path]
+            me_path = getattr(self, 'motion_energy_path', None)
+            if me_path and os.path.exists(me_path):
+                args.append(me_path)
+
+            # Open threshold selection dialog
+            class ThresholdDialog(QDialog):
+                def __init__(self, parent=None):
+                    super().__init__(parent)
+                    self.setWindowTitle("Choose thresholds")
+                    layout = QVBoxLayout(self)
+                    # Intro/explanation block
+                    intro = QLabel(
+                        """
+                        <b>Threshold Methods</b><br>
+                        • <b>Binary threshold</b> (Active vs Rest on smoothed motion energy):<br>
+                        &nbsp;&nbsp;- <b>Otsu</b>: best when the histogram is clearly bimodal (two states).<br>
+                        &nbsp;&nbsp;- <b>Li</b>: useful for multi-peak or complex histograms.<br>
+                        &nbsp;&nbsp;- <b>Mean+SD</b>: simple threshold = mean + standard deviation.<br>
+                        • <b>Twitch threshold</b> (detect twitches during resting periods):<br>
+                        &nbsp;&nbsp;- <b>Otsu</b>: good when rest distribution appears bimodal.<br>
+                        &nbsp;&nbsp;- <b>Li</b>: more permissive; tends to detect more twitches.<br>
+                        &nbsp;&nbsp;- <b>MAD</b>: median + 3*MAD (robust to outliers).<br>
+                        &nbsp;&nbsp;- <b>95th percentile</b>: keeps only the strongest peaks.<br>
+                        &nbsp;&nbsp;- <b>Mean+3*SD</b>: higher threshold, fewer false positives.
+                        """
+                    )
+                    intro.setWordWrap(True)
+                    layout.addWidget(intro)
+                    settings = QSettings('Mousecraft', 'Thresholds')
+                    last_binary = settings.value('binary_method', 'otsu')
+                    last_twitch = settings.value('twitch_method', 'otsu')
+                    # Binary method
+                    bin_layout = QHBoxLayout()
+                    bin_layout.addWidget(QLabel("Binary threshold:"))
+                    self.binary_combo = QComboBox()
+                    self.binary_combo.addItems(["otsu", "li", "mean_sd"])  # must match script options
+                    # Tooltips for binary methods
+                    self.binary_combo.setItemData(0, "Otsu: optimal separation for bimodal distributions.", Qt.ToolTipRole)
+                    self.binary_combo.setItemData(1, "Li: robust when the histogram has multiple peaks.", Qt.ToolTipRole)
+                    self.binary_combo.setItemData(2, "Mean+SD: threshold = mean + standard deviation (simple).", Qt.ToolTipRole)
+                    try:
+                        if last_binary in ["otsu","li","mean_sd"]:
+                            self.binary_combo.setCurrentText(last_binary)
+                        else:
+                            self.binary_combo.setCurrentText("otsu")
+                    except Exception:
+                        self.binary_combo.setCurrentText("otsu")
+                    bin_layout.addWidget(self.binary_combo)
+                    layout.addLayout(bin_layout)
+                    # Twitch method
+                    tw_layout = QHBoxLayout()
+                    tw_layout.addWidget(QLabel("Twitch threshold:"))
+                    self.twitch_combo = QComboBox()
+                    self.twitch_combo.addItems(["otsu", "li", "mad", "percentile_95", "mean_3sd"])  # must match script options
+                    # Tooltips for twitch methods
+                    self.twitch_combo.setItemData(0, "Otsu: automatic split when bimodality is clear.", Qt.ToolTipRole)
+                    self.twitch_combo.setItemData(1, "Li: more permissive; detects more twitches.", Qt.ToolTipRole)
+                    self.twitch_combo.setItemData(2, "MAD: median + 3*MAD, robust to outliers.", Qt.ToolTipRole)
+                    self.twitch_combo.setItemData(3, "95th percentile: keeps only the strongest peaks.", Qt.ToolTipRole)
+                    self.twitch_combo.setItemData(4, "Mean+3*SD: higher threshold, fewer false positives.", Qt.ToolTipRole)
+                    try:
+                        if last_twitch in ["otsu","li","mad","percentile_95","mean_3sd"]:
+                            self.twitch_combo.setCurrentText(last_twitch)
+                        else:
+                            self.twitch_combo.setCurrentText("otsu")
+                    except Exception:
+                        self.twitch_combo.setCurrentText("otsu")
+                    tw_layout.addWidget(self.twitch_combo)
+                    layout.addLayout(tw_layout)
+                    # Buttons
+                    btns = QHBoxLayout()
+                    ok_btn = QPushButton("Run")
+                    cancel_btn = QPushButton("Cancel")
+                    ok_btn.clicked.connect(self.accept)
+                    cancel_btn.clicked.connect(self.reject)
+                    btns.addWidget(ok_btn)
+                    btns.addWidget(cancel_btn)
+                    layout.addLayout(btns)
+                    # Default larger size for readability
+                    self.resize(720, 420)
+
+            dlg = ThresholdDialog(self)
+            if dlg.exec_() != QDialog.Accepted:
+                return
+            # Append threshold choices as positional args expected by the script
+            chosen_binary = dlg.binary_combo.currentText()
+            chosen_twitch = dlg.twitch_combo.currentText()
+            # Persist choices
+            try:
+                settings = QSettings('Mousecraft', 'Thresholds')
+                settings.setValue('binary_method', chosen_binary)
+                settings.setValue('twitch_method', chosen_twitch)
+            except Exception:
+                pass
+            # Add thresholds and no-plots flag (prevents blocking GUI by plt.show)
+            args.extend([chosen_binary, chosen_twitch, '--no-plots'])
+
+            # Non-blocking execution with live log dialog
+            log_dialog = QDialog(self)
+            log_dialog.setWindowTitle("Running analysis...")
+            vbox = QVBoxLayout(log_dialog)
+            log_view = QTextEdit()
+            log_view.setReadOnly(True)
+            vbox.addWidget(log_view)
+            hbox = QHBoxLayout()
+            cancel_btn = QPushButton("Cancel")
+            close_btn = QPushButton("Close")
+            close_btn.setEnabled(False)
+            hbox.addWidget(cancel_btn)
+            hbox.addWidget(close_btn)
+            vbox.addLayout(hbox)
+
+            proc = QProcess(self)
+            proc.setWorkingDirectory(cwd)
+            # Capture stdout/stderr
+            proc.setProcessChannelMode(QProcess.MergedChannels)
+
+            def _append_output():
+                data = proc.readAllStandardOutput().data().decode(errors='ignore')
+                if data:
+                    log_view.append(data)
+
+            proc.readyReadStandardOutput.connect(_append_output)
+            proc.readyReadStandardError.connect(_append_output)
+
+            def _on_finished(exitCode, exitStatus):
+                _append_output()
+                success = (exitCode == 0)
+                loaded_labels = False
+                summary_data = None
+                if success:
+                    try:
+                        me_path_local = getattr(self, 'motion_energy_path', None)
+                        if me_path_local and os.path.exists(me_path_local):
+                            out_dir = os.path.join(os.path.dirname(me_path_local), 'motion_annotation_average')
+                            labels_path = os.path.join(out_dir, 'gui_labels.csv')
+                            summary_path = os.path.join(out_dir, 'analysis_summary.json')
+                            if os.path.exists(labels_path):
+                                self.load_framewise_table(labels_path)
+                                loaded_labels = True
+                            if os.path.exists(summary_path):
+                                import json
+                                with open(summary_path, 'r', encoding='utf-8') as f:
+                                    summary_data = json.load(f)
+                    except Exception:
+                        loaded_labels = False
+                close_btn.setEnabled(True)
+                cancel_btn.setEnabled(False)
+                if success and loaded_labels:
+                    log_view.append("\n✅ Done. gui_labels.csv loaded into the timeline.")
+                elif success:
+                    log_view.append("\n✅ Done. Outputs saved in motion_annotation_average.")
+                else:
+                    log_view.append(f"\n❌ Failed with exit code {exitCode}.")
+
+                # Show analysis summary dialog if available
+                try:
+                    if summary_data:
+                        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QGridLayout
+                        dlg = QDialog(self)
+                        dlg.setWindowTitle("Analysis Summary")
+                        v = QVBoxLayout(dlg)
+                        grid = QGridLayout()
+
+                        def add_row(r, name, value):
+                            grid.addWidget(QLabel(f"{name}:"), r, 0)
+                            grid.addWidget(QLabel(str(value)), r, 1)
+
+                        r = 0
+                        add_row(r, "Mode", summary_data.get('mode')); r += 1
+                        snr = summary_data.get('snr'); add_row(r, "SNR", f"{snr:.3f}" if isinstance(snr, (int,float)) else snr); r += 1
+                        smooth = summary_data.get('smoothing', {})
+                        add_row(r, "Smooth window", smooth.get('adaptive_window_length')); r += 1
+                        add_row(r, "Polyorder", smooth.get('polyorder')); r += 1
+                        bim = summary_data.get('bimodality', {})
+                        add_row(r, "Bimodal", bim.get('is_bimodal')); r += 1
+                        add_row(r, "KDE peaks", bim.get('num_kde_peaks')); r += 1
+                        add_row(r, "Dip p-value", bim.get('dip_p_value')); r += 1
+                        th = summary_data.get('thresholds', {})
+                        bin_th = th.get('binary', {})
+                        add_row(r, "Binary method", bin_th.get('method')); r += 1
+                        add_row(r, "Binary value", bin_th.get('value')); r += 1
+                        tw_th = th.get('twitch', {})
+                        add_row(r, "Twitch method", tw_th.get('method')); r += 1
+                        add_row(r, "Twitch value", tw_th.get('value')); r += 1
+                        cnt = summary_data.get('counts', {})
+                        add_row(r, "# Active motions", cnt.get('n_active_motions')); r += 1
+                        add_row(r, "# Twitches", cnt.get('n_twitches')); r += 1
+                        v.addLayout(grid)
+                        dlg.exec_()
+                except Exception:
+                    pass
+
+            def _on_cancel():
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                cancel_btn.setEnabled(False)
+
+            cancel_btn.clicked.connect(_on_cancel)
+            close_btn.clicked.connect(log_dialog.accept)
+            proc.finished.connect(_on_finished)
+
+            # Start process
+            program = sys.executable
+            proc.start(program, args[1:])
+            log_dialog.exec_()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to run analysis script:\n{e}")
+
+    def load_motion_energy(self):
+        fname, _ = QFileDialog.getOpenFileName(self, 'Load Motion Energy', '', 'CSV/Excel (*.csv *.xlsx *.npy)')
+        if fname:
+            # Remember path and enable compute button for script
+            self.motion_energy_path = fname if fname.lower().endswith('.npy') else None
+            if self.motion_energy_path:
+                self.compute_motion_energy_btn.setEnabled(True)
+            # Existing behavior retained below
+            import os
+            parent = os.path.dirname(fname)
+            grandparent = os.path.dirname(parent)
+            arriere_grandparent = os.path.dirname(grandparent)
+            grandparent_folder = os.path.basename(grandparent)
+            arriere_grandparent_folder = os.path.basename(arriere_grandparent)
+            if fname.endswith('.npy'):
+                self.motion_energy = np.load(fname)
+            else:
+                df = pd.read_excel(fname) if fname.endswith('.xlsx') else pd.read_csv(fname)
+                self.motion_energy = df.select_dtypes(include=[np.number]).iloc[:, 0].values
+            self.prepare_motion_energy()
+            self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+            self.reset_zoom_timeline()
+            self.reset_video_zoom()
+            self.maybe_start_auto_save()
+        
     def load_video(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Video', '', 'Videos (*.avi *.mp4 *.mov *.mkv *.tiff *.tif)')
         if fname:
@@ -973,8 +1281,15 @@ class MotionAnnotator(QWidget):
             traceback.print_exc()
 
     def load_input(self):
-        """Unified loader for motion energy or classifications (.json/.csv/.xlsx/.npy). If a motion energy is already loaded, this can be used to add a second input as well."""
-        fname, _ = QFileDialog.getOpenFileName(self, 'Load an input', '', 'All Supported (*.json *.csv *.xlsx *.npy);;JSON (*.json);;CSV (*.csv);;Excel (*.xlsx);;NumPy (*.npy)')
+        """Unified loader for motion energy or classifications (.json/.csv/.xlsx/.npy).
+        If a motion energy is already loaded, this can be used to add a second input as well.
+        """
+        fname, _ = QFileDialog.getOpenFileName(
+            self,
+            'Load an input',
+            '',
+            'All Supported (*.json *.csv *.xlsx *.npy);;JSON (*.json);;CSV (*.csv);;Excel (*.xlsx);;NumPy (*.npy)'
+        )
         if not fname:
             return
         try:
@@ -982,26 +1297,37 @@ class MotionAnnotator(QWidget):
             if lower.endswith('.npy'):
                 # Treat as motion energy (manual-only mode)
                 self.motion_energy = np.load(fname)
+                # Remember path and enable compute button for external script
+                self.motion_energy_path = fname
+                if hasattr(self, 'compute_motion_energy_btn'):
+                    self.compute_motion_energy_btn.setEnabled(True)
+                # Prepare and display
                 self.prepare_motion_energy()
-                self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+                self.timeline_canvas.plot_motion_energy(
+                    self.motion_energy,
+                    self.onsets,
+                    self.onset_types,
+                    self.timeline_canvas.event_offsets,
+                    getattr(self, 'event_status', None)
+                )
                 self.reset_zoom_timeline()
                 self.manual_mode_primary = True
-            elif lower.endswith('.json'):
-                # Classifications JSON
-                self.load_json_classifications(fname)
             elif lower.endswith('.csv') or lower.endswith('.xlsx'):
                 # Try as classifications first; if not recognized, fall back to motion energy (first numeric column)
                 try:
                     self.load_classifications_from_path(fname)
                 except Exception:
-                    # fallback: motion energy (manual-only mode)
-                    if lower.endswith('.csv'):
-                        df = pd.read_csv(fname)
-                    else:
-                        df = pd.read_excel(fname)
+                    # Fallback: motion energy from first numeric column
+                    df = pd.read_csv(fname) if lower.endswith('.csv') else pd.read_excel(fname)
                     self.motion_energy = df.select_dtypes(include=[np.number]).iloc[:, 0].values
                     self.prepare_motion_energy()
-                    self.timeline_canvas.plot_motion_energy(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+                    self.timeline_canvas.plot_motion_energy(
+                        self.motion_energy,
+                        self.onsets,
+                        self.onset_types,
+                        self.timeline_canvas.event_offsets,
+                        getattr(self, 'event_status', None)
+                    )
                     self.reset_zoom_timeline()
                     self.manual_mode_primary = True
             else:
@@ -1186,6 +1512,7 @@ class MotionAnnotator(QWidget):
             # Identify candidate event columns
             ignore_cols = {'motion_energy', 'status', 'score', 'frame_idx'}
             candidate_cols = [c for c in df.columns if c not in ignore_cols]
+            created = 0
             for col in candidate_cols:
                 etype = str(col).lower().strip()
                 if etype not in self.available_event_types:
@@ -1202,6 +1529,7 @@ class MotionAnnotator(QWidget):
                     self.event_type_colors[etype] = picked
                 arr = df[col].astype(int).values
                 in_event = False
+                onset = None
                 for i, val in enumerate(arr):
                     if val == 1 and not in_event:
                         onset = i
@@ -1236,6 +1564,42 @@ class MotionAnnotator(QWidget):
                             self.curated_events[etype] = []
                         self.curated_events[etype].append([onset, offset, 1])
                         in_event = False
+                        created += 1
+                # If an event is still open at the very end, close it
+                if in_event and onset is not None:
+                    offset = len(arr) - 1
+                    if onset not in self.onsets:
+                        self.onsets.append(onset)
+                        self.onset_types[onset] = etype
+                        self.timeline_canvas.event_offsets[onset] = offset
+                    status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
+                    score = df.at[onset, 'score'] if 'score' in df.columns else 0
+                    if status == 'edited':
+                        gui_status = 'edited'
+                        gui_score = 1 if float(score) == 1 else 0.5
+                    elif status == 'accepted':
+                        gui_status = 'accepted'
+                        gui_score = 1
+                    elif status == 'rejected':
+                        gui_status = 'rejected'
+                        gui_score = -1
+                    elif status == 'manually added':
+                        gui_status = 'manually added'
+                        gui_score = 0
+                    else:
+                        gui_status = 'pending'
+                        gui_score = 0
+                    self.timeline_canvas.onset_validations[onset] = gui_status
+                    self.event_status[onset] = gui_score
+                    if etype not in self.curated_events:
+                        self.curated_events[etype] = []
+                    self.curated_events[etype].append([onset, offset, 1])
+                    in_event = False
+                    created += 1
+            try:
+                print(f"[Framewise Loader] Built {created} events for type '{etype}'")
+            except Exception:
+                pass
             self.onsets = sorted(set(self.onsets))
             # Propagate UI and canvas settings
             if hasattr(self, 'event_type_combo'):
@@ -2594,7 +2958,26 @@ Average Score: {avg_score:.3f}
         # Clean and fill missing status values
         if 'status' in df.columns:
             df['status'] = df['status'].fillna('pending').astype(str).str.strip().str.lower()
-        self.motion_energy = df['motion_energy'].values
+
+        # Motion energy is required for timeline scaling (keep original indexing; do NOT average here)
+        if 'motion_energy' in df.columns:
+            self.motion_energy = pd.to_numeric(df['motion_energy'], errors='coerce').fillna(0).values.astype(np.float64)
+            # Keep indices 1:1 with dataframe rows to align onsets/offsets
+            self.total_frames = len(self.motion_energy)
+            self.frame_slider.setMaximum(max(0, self.total_frames - 1))
+            self.onset_spinbox.setMaximum(max(0, self.total_frames - 1))
+            self.offset_spinbox.setMaximum(max(0, self.total_frames - 1))
+        else:
+            # Fallback: if not provided, create a zero signal length = max frame_idx or infer from first binary col
+            if 'frame_idx' in df.columns:
+                n = int(df['frame_idx'].max()) + 1
+            else:
+                # Find first numeric col to infer length
+                num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+                n = len(df[num_cols[0]]) if num_cols else 1000
+            self.motion_energy = np.zeros(n, dtype=np.float64)
+
+        # Reset structures
         self.onsets = []
         self.onset_types = {}
         self.timeline_canvas.event_offsets = {}
@@ -2602,74 +2985,149 @@ Average Score: {avg_score:.3f}
         self.curated_events = {}
         self.timeline_canvas.onset_validations = {}
 
-        for event_type in ['active', 'twitch']:
-            arr = df[event_type].values
+        # Detect any number of event-type columns (binary masks) dynamically
+        # Rule: numeric columns not in ignore list AND values exclusively in {0,1} with at least one 1
+        ignore_cols = {'motion_energy', 'status', 'score', 'frame_idx'}
+        candidate_cols = []
+        for c in df.columns:
+            if c in ignore_cols:
+                continue
+            if not pd.api.types.is_numeric_dtype(df[c]):
+                continue
+            try:
+                series = pd.to_numeric(df[c], errors='coerce')
+                vals = pd.unique(series.dropna().round(0))
+                uniques = set([float(v) for v in vals.tolist()])
+                if uniques.issubset({0.0, 1.0}):
+                    # Must contain at least one 1 to be considered an event type
+                    if (series.fillna(0).round(0).astype(int) == 1).any():
+                        candidate_cols.append(c)
+            except Exception:
+                continue
+        try:
+            print(f"[Framewise Loader] Detected binary event columns: {candidate_cols}")
+        except Exception:
+            pass
+
+        # Ensure dynamic palette exists
+        if not hasattr(self, '_auto_palette'):
+            self._auto_palette = [
+                "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+            ]
+
+        for col in candidate_cols:
+            etype = str(col).lower().strip()
+            # Register type and assign color if new
+            if etype not in self.available_event_types:
+                self.available_event_types.append(etype)
+            if etype not in self.event_type_colors:
+                used = {c.lower() for c in self.event_type_colors.values()}
+                picked = None
+                for c in self._auto_palette:
+                    if c.lower() not in used:
+                        picked = c
+                        break
+                if picked is None:
+                    picked = f"#{hash(etype) & 0xFFFFFF:06x}"
+                self.event_type_colors[etype] = picked
+
+            # Parse binary mask into intervals
+            arr = df[col].fillna(0).astype(int).values
             in_event = False
+            onset = None
+            created = 0
             for i, val in enumerate(arr):
                 if val == 1 and not in_event:
                     onset = i
                     in_event = True
-                elif val == 0 and in_event:
-                    offset = i - 1  # Make offset inclusive
+                elif (val == 0 or i == len(arr) - 1) and in_event:
+                    offset = i - 1 if val == 0 else i
                     if onset not in self.onsets:
                         self.onsets.append(onset)
-                        self.onset_types[onset] = event_type
+                        self.onset_types[onset] = etype
                         self.timeline_canvas.event_offsets[onset] = offset
+                        created += 1
+                    # Optional status/score if present (attach to onset)
                     status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
                     score = df.at[onset, 'score'] if 'score' in df.columns else 0
                     if status == 'edited':
-                        gui_status = 'edited'
-                        gui_score = 1 if float(score) == 1 else 0.5
+                        gui_status = 'edited'; gui_score = 1 if float(score) == 1 else 0.5
                     elif status == 'accepted':
-                        gui_status = 'accepted'
-                        gui_score = 1
+                        gui_status = 'accepted'; gui_score = 1
                     elif status == 'rejected':
-                        gui_status = 'rejected'
-                        gui_score = -1
+                        gui_status = 'rejected'; gui_score = -1
                     elif status == 'manually added':
-                        gui_status = 'manually added'
-                        gui_score = 0
+                        gui_status = 'manually added'; gui_score = 0
                     else:
-                        gui_status = 'pending'
-                        gui_score = 0
+                        gui_status = 'pending'; gui_score = 0
                     self.timeline_canvas.onset_validations[onset] = gui_status
                     self.event_status[onset] = gui_score
-                    if event_type not in self.curated_events:
-                        self.curated_events[event_type] = []
-                    self.curated_events[event_type].append([onset, offset, 1])
+                    if etype not in self.curated_events:
+                        self.curated_events[etype] = []
+                    self.curated_events[etype].append([onset, offset, 1])
                     in_event = False
-            if in_event:
-                offset = len(arr) - 1  # Make offset inclusive
+            # If an event is still open at the very end, close it
+            if in_event and onset is not None:
+                offset = len(arr) - 1
                 if onset not in self.onsets:
                     self.onsets.append(onset)
-                    self.onset_types[onset] = event_type
+                    self.onset_types[onset] = etype
                     self.timeline_canvas.event_offsets[onset] = offset
+                    created += 1
                 status = str(df.at[onset, 'status']).strip().lower() if 'status' in df.columns else 'pending'
                 score = df.at[onset, 'score'] if 'score' in df.columns else 0
                 if status == 'edited':
-                    gui_status = 'edited'
-                    gui_score = 1 if float(score) == 1 else 0.5
+                    gui_status = 'edited'; gui_score = 1 if float(score) == 1 else 0.5
                 elif status == 'accepted':
-                    gui_status = 'accepted'
-                    gui_score = 1
+                    gui_status = 'accepted'; gui_score = 1
                 elif status == 'rejected':
-                    gui_status = 'rejected'
-                    gui_score = -1
+                    gui_status = 'rejected'; gui_score = -1
                 elif status == 'manually added':
-                    gui_status = 'manually added'
-                    gui_score = 0
+                    gui_status = 'manually added'; gui_score = 0
                 else:
-                    gui_status = 'pending'
-                    gui_score = 0
+                    gui_status = 'pending'; gui_score = 0
                 self.timeline_canvas.onset_validations[onset] = gui_status
                 self.event_status[onset] = gui_score
-                if event_type not in self.curated_events:
-                    self.curated_events[event_type] = []
-                self.curated_events[event_type].append([onset, offset, 1])
+                if etype not in self.curated_events:
+                    self.curated_events[etype] = []
+                self.curated_events[etype].append([onset, offset, 1])
 
+        # Finalize and update UI
         self.onsets = sorted(set(self.onsets))
+        # Update combos with all event types
+        if hasattr(self, 'event_type_combo'):
+            placeholder = self.event_type_combo.itemText(0) if self.event_type_combo.count() > 0 else "Select type…"
+            self.event_type_combo.clear()
+            self.event_type_combo.addItem(placeholder)
+            self.event_type_combo.addItems(self.available_event_types)
+            self.event_type_combo.setCurrentIndex(0)
+        if hasattr(self, 'onset_filter_combo'):
+            current_idx = self.onset_filter_combo.currentIndex() if self.onset_filter_combo.count() > 0 else 0
+            self.onset_filter_combo.clear()
+            self.onset_filter_combo.addItems(["All"] + [t.capitalize() for t in self.available_event_types])
+            if current_idx < self.onset_filter_combo.count():
+                self.onset_filter_combo.setCurrentIndex(current_idx)
+        if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
+            self.change_type_dropdown.clear()
+            self.change_type_dropdown.addItems(self.available_event_types)
+        # Propagate colors to canvases
+        # Decide default visibility: if both active and twitch exist, hide complex by default
+        default_visible = list(self.available_event_types)
+        if 'active' in default_visible and 'twitch' in default_visible and 'complex' in default_visible:
+            default_visible = [t for t in default_visible if t != 'complex']
+        if hasattr(self, 'timeline_canvas'):
+            self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+            # Overwrite visible_event_types to prevent stale state from previous loads
+            self.timeline_canvas.visible_event_types = list(default_visible)
+        if hasattr(self, 'timeline_canvas2'):
+            self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+            self.timeline_canvas2.visible_event_types = list(default_visible)
+
         self.current_onset_idx = 0
-        self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
+        self.timeline_canvas.plot_motion_energy_preserve_view(
+            self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None)
+        )
         if self.onsets:
             self.goto_onset(0)
         self.undo_btn.setEnabled(True)
