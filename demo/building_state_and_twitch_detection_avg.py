@@ -123,7 +123,7 @@ print(f' max_twitch_allowed: {twitch_duration_max/framerate} sec')
 is_sleap = False
 
 save_dir = subject_path
-save_dir_videography = mkdir(f'{save_dir}/motion_annotation_average')
+save_dir_videography = mkdir(f'{save_dir}/mousecraft_automatic_classifications')
 save_dir_videography = Path(save_dir_videography)
 
 # # Compute/Load motion energy
@@ -1051,7 +1051,7 @@ df_framewise = pd.DataFrame({
 })
 
 # Save as CSV for GUI loading
-df_framewise.to_csv(save_dir_videography / f'gui_labels.csv', index=False)
+df_framewise.to_csv(save_dir_videography / f'mousecraft_auto_labels.csv', index=False)
 
 # # Write on video for validation (manual curation)
 

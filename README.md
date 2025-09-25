@@ -1,45 +1,46 @@
 # Mousecraft                                                     <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/85e1e2fc-9308-42e5-8c03-8616f15092d6" />
-                                                                                                                                                                                                                                         
-A fun & splendid GUI used for validating behavior annotations.
+                                                                                                                                                                                                                                       
+A human & mouse-friendly GUI used for validating or creating behavior annotations.
 
 ## Features
 
-- Load video and motion enegry or classification labels
+- Load video(s) and motion signal or annotation outputs
 - Validate, edit, and add motion events
-- Export results in multiple formats (MF, HF) (.npy, .csv) & plot some performance statistics 
+- Export results in multiple formats (.npy, .csv) & plot some performance statistics 
 
 ## Installation
 
 ### Using Conda (Recommended)
 
-For local installation (tried in Windows, to be tried in other os's)
+For local installation (tried in Windows, to be tried in other os's) 
 
-1. Install an Anaconda distribution of Python or miniconda (miniforge, if anaconda wont work try via miniforge same commands) & GitBash 
-
-2.  Open an anaconda prompt / command prompt with conda for python 3 in the path.
-Navigate where you want the mousecraft to live.
-
-3. In git bash do  ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
-If this does not work, do the git clone in GitBash.
-
-4. In the anaconda prompt, doo ``cd Mousecraft`` to go into the root folder of mousecraft gui.
+1. Install Anaconda (https://www.anaconda.com/download) or Miniconda &  install also: GitBash (https://git-scm.com/downloads).
+Tip: If Anaconda/Miniconda gives issues, try installing Miniforge and do the procedure there.
    
-5. Then create a new environment with ``conda env create -f environment.yml`` . In case creating this environment takes too long, try doing so, in miniconda prompt or else stay in anaconda prompt use conda forge like so: ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``
+2.  Open an git bash and navigate to the folder where you want Mousecraft to be installed.
   
-6. This creates the mousecraft envinroment, which you can then activate running ``conda activate mousecraft`` . 
+3. Clone the repository to your computer pasting: ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git
    
-7. Once env is activated do: ``pip install -e .`` 
-This installs mousecraft to your local repository!
+4. Open an anaconda prompt and navigate to the cloned root folder of the MouseCraft GUI ``cd Mousecraft``. 
 
-8. Now run ``python -m mousecraft`` and you're all set. 
-You can also try just ``mousecraft`` but in case this won't work use the above command.
+5. Create the MouseCraft envirnoment with ``conda env create -f environment.yml``
+   
+If this is slow, try: ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``
+  
+6. Activate MouseCraft environment with ``conda activate mousecraft`` . 
+   
+7. Then do: ``pip install -e .`` 
+This installs mousecraft package to your local repository!
+
+8. Open the GUI: Run ``python -m mousecraft`` and you're all set! 
 
 ### Using pip only
 
 Another way to install the mousecraft package via pip is:
 
-``pip install git+https://github.com/SofiaZang/Mousecraft.git`` in the same directory where you want the mousecraft repository to live in.
-
+1. ``pip install git+https://github.com/SofiaZang/Mousecraft.git`` after navigateing to the directory where you want the MouseCraft to be installed in.
+   
+### After Installation:
 Everytime you want to use Mousecraft, you have to first run ``conda activate mousecraft`` and then: ``mousecraft`` or ``python -m mousecraft`` 
 
 <img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
@@ -47,6 +48,7 @@ Everytime you want to use Mousecraft, you have to first run ``conda activate mou
 Friendly tip #2: Do not attempt to exit, it won't work :) 
 
 <img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
+<img width="1916" height="1016" alt="Mousecraft_new_v" src="https://github.com/user-attachments/assets/cce28603-d2d5-4f77-bab2-28f0fc4f013c" />
 
 
 ## Dependencies
@@ -86,22 +88,23 @@ dependencies:
 
 
 ## Inputs
-Input formats: 
 
-Mousecraft accepts any .npy file of the motion signal you have eg. motion_energy.npy or if you have run the automatic classification notebook then the annotation labels saves as 
-gui_lables.csv or .xls under the folder 'mouse_motion_average' under the dataset you analysed. This file will also contain the motion signal value for each frame of the recording so will automatically load and display both motion signal and proposed annotations.
+Mousecraft accepts any .npy file (or .json) of the motion signal you have eg. motion_energy.npy (or motion_energy.json) or if you have run the automatic classification notebook then the annotation labels saved as gui_lables.csv or .xlsx under the folder 'mouse_motion_average' under the dataset folder you analysed. This file will also contain the motion signal value for each frame of the recording so will automatically load and display both motion signal and proposed annotations. If you have used another method to classify your signal, you can still load your proposed annotations as long as they follow the same matrxi structure with columns: 'frame_idx, signal, event_type 1, event_type 2, event_type 3, .. event_type_n'
 
-You also need to load an .avi maybe .mp4 or other formats (TO DO: all video formats)
+<img width="730" height="327" alt="image" src="https://github.com/user-attachments/assets/8581b1f9-45bb-478c-b755-9ef1b168ac83" />
 
-Directory structure
+<img width="279" height="118" alt="image" src="https://github.com/user-attachments/assets/ccd656b2-f914-4919-b33a-12522b038588" />
 
-Mousecraft looks for all inputs in the folder you define. 
+You also need to load a movie in one of the following .avi, .mp4, .mkv, .mov, .tiff formats (tip: downsample the movie or compress before loading, else may be too heavy and crash)
 
-See examples in this notebook https://colab.research.google.com/drive/1Sfts_onqzadvvcDXfVnDBEA_10ic7_YI?usp=sharing
+See examples of the classification algorithm mousecraft uses in this notebook https://colab.research.google.com/drive/1Sfts_onqzadvvcDXfVnDBEA_10ic7_YI?usp=sharing
 
 Tips: For the notebook to run you need the motion_energy.npy (or other motion_signal.npy) or the .tiff file of the behavior you want to annotate if you have not computed the motion energy and it will be automatically computed in the notebook run.
 
 ## Using the GUI
+
+<img width="1130" height="379" alt="image" src="https://github.com/user-attachments/assets/2e8a90bc-dff4-409f-a51f-37182ad4e677" />
+
 The interface is divided into two main panels:
 
 Left Panel: Video playback and control
@@ -155,7 +158,7 @@ Tip: In case you have made some mistake and an event overlaps with another, an e
 Displays the motion energy trace over frames.
 
 #### Load An Input
-Loads a precomputed motion energy file (.csv, .xlsx, .npy) or a classification (Active/Twitch events) for review and editing.
+Loads a precomputed motion energy file (.csv, .xlsx, .npy, .json) or a classification (Active/Twitch events) for review and editing.
 Annotated events appear as colored spans: Yellow: Active events, Purple: Twitch events, Green/Red/Orange dots: Validation status (Accepted, Rejected, Edited).
 
 #### Add A Second Input
@@ -211,6 +214,8 @@ This matters for accuracy tracking. Sets the frame tolerance used when classifyi
 ## Mousecraft outputs
 
 ### Main outputs:
+
+<img width="730" height="327" alt="image" src="https://github.com/user-attachments/assets/eb89236a-7453-4f5e-a3dd-8c4bf1db6041" />
 
 Mousecraft currently outputs 2 main outputs in .npy and .csv format:
 

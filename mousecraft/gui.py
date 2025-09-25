@@ -431,7 +431,7 @@ class MotionAnnotator(QWidget):
         video_layout.addWidget(self.add_camera_btn, 0, 1)
         
         # Compute motion energy by running the analysis script
-        self.compute_motion_energy_btn = QPushButton("Compute a ME")
+        self.compute_motion_energy_btn = QPushButton("Compute classification")
         self.compute_motion_energy_btn.clicked.connect(self.run_state_detection_script)
         video_layout.addWidget(self.compute_motion_energy_btn, 0, 2)
         # Initially disabled until a motion energy file is selected/loaded
@@ -884,14 +884,14 @@ class MotionAnnotator(QWidget):
             QMessageBox.warning(self, "No File Selected", "Please select a motion energy file.")
 
     def run_state_detection_script(self):
-        """Run the demo/building_state_and_twitch_detection_avg.py script as-is via subprocess.
+        """Run the mousecraft/building_state_and_twitch_detection_avg.py script via subprocess.
         This preserves the current behavior and parameters defined inside the script.
         """
         try:
             import subprocess, sys
             from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QTextEdit
             # Resolve script path relative to this file
-            script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "demo", "building_state_and_twitch_detection_avg.py"))
+            script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "building_state_and_twitch_detection_avg.py"))
             if not os.path.exists(script_path):
                 QMessageBox.critical(self, "Error", f"Analysis script not found:\n{script_path}")
                 return
@@ -1034,8 +1034,8 @@ class MotionAnnotator(QWidget):
                     try:
                         me_path_local = getattr(self, 'motion_energy_path', None)
                         if me_path_local and os.path.exists(me_path_local):
-                            out_dir = os.path.join(os.path.dirname(me_path_local), 'motion_annotation_average')
-                            labels_path = os.path.join(out_dir, 'gui_labels.csv')
+                            out_dir = os.path.join(os.path.dirname(me_path_local), 'mousecraft_automatic_classifications')
+                            labels_path = os.path.join(out_dir, 'mousecraft_auto_labels.csv')
                             summary_path = os.path.join(out_dir, 'analysis_summary.json')
                             if os.path.exists(labels_path):
                                 self.load_framewise_table(labels_path)
@@ -1049,9 +1049,9 @@ class MotionAnnotator(QWidget):
                 close_btn.setEnabled(True)
                 cancel_btn.setEnabled(False)
                 if success and loaded_labels:
-                    log_view.append("\n✅ Done. gui_labels.csv loaded into the timeline.")
+                    log_view.append("\n✅ Done. mousecraft_auto_labels.csv loaded into the timeline.")
                 elif success:
-                    log_view.append("\n✅ Done. Outputs saved in motion_annotation_average.")
+                    log_view.append("\n✅ Done. Outputs saved in mousecraft_automatic_classifications.")
                 else:
                     log_view.append(f"\n❌ Failed with exit code {exitCode}.")
 
@@ -3684,7 +3684,7 @@ Average Score: {avg_score:.3f}
                 status_label = status
             mf_df.at[onset, 'status'] = status_label
             mf_df.at[onset, 'score'] = score
-        mf_path = os.path.join(output_dir, f"validation_MF{suffix}.xlsx")
+        mf_path = os.path.join(output_dir, f"mousecraft_validated_labels_MF{suffix}.xlsx")
         created_files = []
         try:
             mf_df.to_excel(mf_path, index=False)
@@ -3703,16 +3703,16 @@ Average Score: {avg_score:.3f}
             )
         except Exception:
             # Fallback to CSV in the same directory
-            mf_path_csv = os.path.join(output_dir, f"validation_MF{suffix}.csv")
+            mf_path_csv = os.path.join(output_dir, f"mousecraft_validated_labels_MF{suffix}.csv")
             try:
                 mf_df.to_csv(mf_path_csv, index=False)
                 created_files.append(mf_path_csv)
             except Exception as e2:
-                QMessageBox.critical(self, "Export Error", f"Failed to save validation_MF: {e2}")
+                QMessageBox.critical(self, "Export Error", f"Failed to save mousecraft_validated_labels_MF: {e2}")
         # Sauvegarde aussi en numpy uniquement
         import numpy as np
         if len(mf_df) > 0:
-            mf_npy_path = os.path.splitext(created_files[-1])[0] + ".npy" if created_files else os.path.join(output_dir, f"validation_MF{suffix}.npy")
+            mf_npy_path = os.path.splitext(created_files[-1])[0] + ".npy" if created_files else os.path.join(output_dir, f"mousecraft_validated_labels_MF{suffix}.npy")
             try:
                 np.save(mf_npy_path, mf_df.to_numpy())
                 created_files.append(mf_npy_path)
@@ -3735,21 +3735,21 @@ Average Score: {avg_score:.3f}
                 score = 0
             export_events.append([onset, offset, event_type, status, score])
         hf_df = pd.DataFrame(export_events, columns=pd.Index(['onset', 'offset', 'event_type', 'status', 'score']))
-        hf_path = os.path.join(output_dir, f"validation_HF{suffix}.xlsx")
+        hf_path = os.path.join(output_dir, f"mousecraft_validated_labels_HF{suffix}.xlsx")
         try:
             hf_df.to_excel(hf_path, index=False)
             created_files.append(hf_path)
         except Exception:
             # Fallback to CSV
-            hf_path_csv = os.path.join(output_dir, f"validation_HF{suffix}.csv")
+            hf_path_csv = os.path.join(output_dir, f"mousecraft_validated_labels_HF{suffix}.csv")
             try:
                 hf_df.to_csv(hf_path_csv, index=False)
                 created_files.append(hf_path_csv)
             except Exception as e2:
-                QMessageBox.critical(self, "Export Error", f"Failed to save validation_HF: {e2}")
+                QMessageBox.critical(self, "Export Error", f"Failed to save mousecraft_validated_labels_HF: {e2}")
         # Sauvegarde aussi en numpy uniquement
         if len(hf_df) > 0:
-            hf_npy_path = os.path.splitext(created_files[-1])[0] + ".npy" if created_files else os.path.join(output_dir, f"validation_HF{suffix}.npy")
+            hf_npy_path = os.path.splitext(created_files[-1])[0] + ".npy" if created_files else os.path.join(output_dir, f"mousecraft_validated_labels_HF{suffix}.npy")
             try:
                 np.save(hf_npy_path, hf_df.to_numpy())
                 created_files.append(hf_npy_path)
