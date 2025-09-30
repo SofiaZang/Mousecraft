@@ -19,7 +19,7 @@ Tip: If Anaconda/Miniconda gives issues, try installing Miniforge and do the pro
    
 2.  Open an git bash and navigate to the folder where you want Mousecraft to be installed.
   
-3. Clone the repository to your computer pasting: ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git
+3. Clone the mousecraft repository to your computer pasting: ```git clone https://github.com/SofiaZang/Mousecraft.git```. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git
    
 4. Open an anaconda prompt and navigate to the cloned root folder of the MouseCraft GUI ``cd Mousecraft``. 
 

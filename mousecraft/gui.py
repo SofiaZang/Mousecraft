@@ -769,6 +769,8 @@ class MotionAnnotator(QWidget):
         self.finish_edit_btn.clicked.connect(self.finish_edit_onset)
         edit_form.addWidget(self.finish_edit_btn)
         self.edit_widget.setLayout(edit_form)
+        # Limit edit widget height to reduce layout shifts
+        self.edit_widget.setMaximumHeight(40)
         self.edit_widget.hide()
         onset_layout.addWidget(self.edit_widget)
         # Remove this line - split_widget no longer exists
@@ -813,16 +815,16 @@ class MotionAnnotator(QWidget):
         right_panel.addWidget(timeline_group)
         right_panel.addWidget(onset_group)
         right_panel.addWidget(manual_event_group)
-        splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter = QSplitter(Qt.Horizontal)
         left_widget = QWidget()
         left_widget.setLayout(left_panel)
         left_widget.setMinimumWidth(300)
-        splitter.addWidget(left_widget)
+        self.main_splitter.addWidget(left_widget)
         right_widget = QWidget()
         right_widget.setLayout(right_panel)
-        splitter.addWidget(right_widget)
-        splitter.setSizes([850, 750])  # Réactivé pour une séparation visuelle comme avant
-        content_layout.addWidget(splitter)
+        self.main_splitter.addWidget(right_widget)
+        self.main_splitter.setSizes([850, 750])  # Réactivé pour une séparation visuelle comme avant
+        content_layout.addWidget(self.main_splitter)
         main_layout.addLayout(content_layout)
         self.setLayout(main_layout)
         # Manual-only mode flags (when only raw motion is loaded)
@@ -884,33 +886,70 @@ class MotionAnnotator(QWidget):
             QMessageBox.warning(self, "No File Selected", "Please select a motion energy file.")
 
     def run_state_detection_script(self):
-        """Run the mousecraft/building_state_and_twitch_detection_avg.py script via subprocess.
-        This preserves the current behavior and parameters defined inside the script.
-        """
+        """Run the demo/building_state_and_twitch_detection_avg.py script via subprocess with a source selection (video or ME)."""
         try:
             import subprocess, sys
-            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QTextEdit
+            from PyQt5.QtWidgets import (
+                QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
+                QTextEdit, QRadioButton, QLineEdit, QFileDialog
+            )
             # Resolve script path relative to this file
-            script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "building_state_and_twitch_detection_avg.py"))
+            script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "demo", "building_state_and_twitch_detection_avg.py"))
             if not os.path.exists(script_path):
                 QMessageBox.critical(self, "Error", f"Analysis script not found:\n{script_path}")
                 return
 
             # Run the script with Python interpreter; set cwd to the demo folder
             cwd = os.path.dirname(script_path)
-            # If a motion energy path has been selected/loaded, pass it to the script
-            args = [sys.executable, script_path]
-            me_path = getattr(self, 'motion_energy_path', None)
-            if me_path and os.path.exists(me_path):
-                args.append(me_path)
-
-            # Open threshold selection dialog
+            # Selection + thresholds dialog
             class ThresholdDialog(QDialog):
                 def __init__(self, parent=None):
                     super().__init__(parent)
-                    self.setWindowTitle("Choose thresholds")
+                    self.setWindowTitle("Compute classification: source and thresholds")
                     layout = QVBoxLayout(self)
-                    # Intro/explanation block
+                    # Source selection block
+                    src_label = QLabel("Select source:")
+                    layout.addWidget(src_label)
+                    src_box = QHBoxLayout()
+                    self.radio_video = QRadioButton("Compute from a video")
+                    self.radio_me = QRadioButton("Use precomputed Motion Energy")
+                    src_box.addWidget(self.radio_video)
+                    src_box.addWidget(self.radio_me)
+                    layout.addLayout(src_box)
+
+                    # Video picker (only used if no video already loaded in GUI)
+                    vid_box = QHBoxLayout()
+                    self.video_path_edit = QLineEdit()
+                    self.video_path_edit.setPlaceholderText("Select a .tif/.tiff/.avi file…")
+                    browse_btn = QPushButton("Browse…")
+                    def on_browse():
+                        path, _ = QFileDialog.getOpenFileName(self, "Select video file", "", "Video/Stacks (*.tif *.tiff *.avi)")
+                        if path:
+                            self.video_path_edit.setText(path)
+                            self.radio_video.setChecked(True)
+                            self._update_ok_enabled()
+                    browse_btn.clicked.connect(on_browse)
+                    vid_box.addWidget(self.video_path_edit)
+                    vid_box.addWidget(browse_btn)
+                    layout.addLayout(vid_box)
+
+                    # Availability: enable/disable radios based on context
+                    me_path_local = getattr(parent, 'motion_energy_path', None)
+                    has_me = bool(me_path_local and os.path.exists(me_path_local))
+                    video_path_local = getattr(parent, 'video_path', None)
+                    has_video = bool(video_path_local and os.path.exists(video_path_local))
+                    self.radio_me.setEnabled(has_me)
+                    # If a video is already loaded, pre-fill but keep picker enabled so user can select a different raw file (e.g., original TIFF)
+                    if has_video:
+                        self.video_path_edit.setText(video_path_local)
+                        # keep enabled
+                    # Default selection
+                    if has_me and not has_video:
+                        self.radio_me.setChecked(True)
+                    else:
+                        self.radio_video.setChecked(True)
+
+                    # Intro/explanation for thresholds
                     intro = QLabel(
                         """
                         <b>Threshold Methods</b><br>
@@ -971,19 +1010,48 @@ class MotionAnnotator(QWidget):
                     layout.addLayout(tw_layout)
                     # Buttons
                     btns = QHBoxLayout()
-                    ok_btn = QPushButton("Run")
+                    self.ok_btn = QPushButton("Run")
                     cancel_btn = QPushButton("Cancel")
-                    ok_btn.clicked.connect(self.accept)
+                    self.ok_btn.clicked.connect(self.accept)
                     cancel_btn.clicked.connect(self.reject)
-                    btns.addWidget(ok_btn)
+                    btns.addWidget(self.ok_btn)
                     btns.addWidget(cancel_btn)
                     layout.addLayout(btns)
                     # Default larger size for readability
                     self.resize(720, 420)
 
+                    # Live enable/disable of OK button
+                    self.radio_video.toggled.connect(self._update_ok_enabled)
+                    self.radio_me.toggled.connect(self._update_ok_enabled)
+                    self.video_path_edit.textChanged.connect(self._update_ok_enabled)
+                    self._update_ok_enabled()
+
+                def _update_ok_enabled(self):
+                    want_video = self.radio_video.isChecked()
+                    if want_video:
+                        # Require a valid path when computing from a video
+                        ok = len(self.video_path_edit.text().strip()) > 0 and os.path.exists(self.video_path_edit.text().strip())
+                    else:
+                        ok = self.radio_me.isEnabled()  # enabled only if ME is available
+                    self.ok_btn.setEnabled(bool(ok))
+
             dlg = ThresholdDialog(self)
             if dlg.exec_() != QDialog.Accepted:
                 return
+            # Build args
+            args = [sys.executable, script_path]
+            # Source selection
+            me_path = getattr(self, 'motion_energy_path', None)
+            if dlg.radio_me.isChecked():
+                if me_path and os.path.exists(me_path):
+                    args.append(me_path)
+            else:
+                # Prefer the dialog-selected video path; fallback to already loaded video if empty
+                video_path = dlg.video_path_edit.text().strip()
+                if not video_path:
+                    video_path = getattr(self, 'video_path', None)
+                if video_path:
+                    args.append(video_path)
             # Append threshold choices as positional args expected by the script
             chosen_binary = dlg.binary_combo.currentText()
             chosen_twitch = dlg.twitch_combo.currentText()
@@ -1033,8 +1101,22 @@ class MotionAnnotator(QWidget):
                 if success:
                     try:
                         me_path_local = getattr(self, 'motion_energy_path', None)
+                        base_dir = None
                         if me_path_local and os.path.exists(me_path_local):
-                            out_dir = os.path.join(os.path.dirname(me_path_local), 'mousecraft_automatic_classifications')
+                            base_dir = os.path.dirname(me_path_local)
+                        else:
+                            # Fallback: if computed from a loaded video, use its folder
+                            vid_path_local = getattr(self, 'video_path', None)
+                            if vid_path_local and os.path.exists(vid_path_local):
+                                base_dir = os.path.dirname(vid_path_local)
+                            else:
+                                # As a last resort, try second video
+                                vid2_path_local = getattr(self, 'second_video_path', None)
+                                if vid2_path_local and os.path.exists(vid2_path_local):
+                                    base_dir = os.path.dirname(vid2_path_local)
+
+                        if base_dir and os.path.exists(base_dir):
+                            out_dir = os.path.join(base_dir, 'mousecraft_automatic_classifications')
                             labels_path = os.path.join(out_dir, 'mousecraft_auto_labels.csv')
                             summary_path = os.path.join(out_dir, 'analysis_summary.json')
                             if os.path.exists(labels_path):
@@ -1168,6 +1250,9 @@ class MotionAnnotator(QWidget):
             grandparent_folder = os.path.basename(os.path.dirname(os.path.dirname(fname)))
             self.video_folder_label.setText(f"Video folder : {grandparent_folder} / {parent_folder}")
             self.maybe_start_auto_save()
+            # Enable compute button since a camera/video is now loaded
+            if hasattr(self, 'compute_motion_energy_btn'):
+                self.compute_motion_energy_btn.setEnabled(True)
 
     def add_camera(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Second Video', '', 'Videos (*.avi *.mp4 *.mov *.mkv *.tiff *.tif)')
@@ -1193,6 +1278,9 @@ class MotionAnnotator(QWidget):
         self.reset_video_zoom(target=2)
         # Trigger a repaint at current frame for both cameras
         self.show_frame(self.current_frame)
+        # Enable compute button since a camera/video is now loaded
+        if hasattr(self, 'compute_motion_energy_btn'):
+            self.compute_motion_energy_btn.setEnabled(True)
         
     def load_motion_energy(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Load Motion Energy', '', 'CSV/Excel (*.csv *.xlsx *.npy)')
@@ -2557,6 +2645,11 @@ class MotionAnnotator(QWidget):
             current_onset = self.filtered_onsets[self.current_onset_idx]
         else:
             current_onset = self.onsets[self.current_onset_idx]
+        # Record the original anchor for robust overlap exclusion during this edit session
+        try:
+            self._currently_editing_anchor = self.original_onsets.get(current_onset, current_onset)
+        except Exception:
+            self._currently_editing_anchor = current_onset
         offset = self.timeline_canvas.event_offsets.get(current_onset, current_onset)
         self.edit_onset_spinbox.setValue(current_onset)
         self.edit_offset_spinbox.setValue(offset + 1)  # Show exclusive offset
@@ -4281,10 +4374,33 @@ Average Score: {avg_score:.3f}
         elif not isinstance(exclude_onsets, (list, tuple, set)):
             exclude_onsets = [exclude_onsets]
         overlapped = []
+        # Determine original anchor for the edited event if available
+        edited_orig = None
+        try:
+            edited_orig = self.original_onsets.get(new_onset, new_onset)
+        except Exception:
+            edited_orig = new_onset
+        # Fallback to session anchor if mapping is not yet established
+        if edited_orig is None or edited_orig == new_onset:
+            try:
+                if hasattr(self, '_currently_editing_anchor'):
+                    edited_orig = self._currently_editing_anchor
+            except Exception:
+                pass
         for other_onset in self.onsets:
             if other_onset in exclude_onsets:
                 continue
             other_offset = self.timeline_canvas.event_offsets.get(other_onset, other_onset)
+            # Never propose the edited event itself
+            if other_onset == new_onset and other_offset == new_offset:
+                continue
+            # If we track original_onsets, never propose events sharing the same original anchor
+            try:
+                other_orig = self.original_onsets.get(other_onset, other_onset)
+                if edited_orig is not None and other_orig == edited_orig:
+                    continue
+            except Exception:
+                pass
             # Check if other event is totally inside new event
             if new_onset < other_onset and new_offset > other_offset:
                 overlapped.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
@@ -4318,10 +4434,33 @@ Average Score: {avg_score:.3f}
         elif not isinstance(exclude_onsets, (list, tuple, set)):
             exclude_onsets = [exclude_onsets]
         overlapped = []
+        # Determine original anchor for the edited event if available (tolerate missing attributes)
+        edited_orig = None
+        try:
+            edited_orig = self.original_onsets.get(new_onset, new_onset)
+        except Exception:
+            edited_orig = new_onset
+        # Fallback to session anchor
+        if edited_orig is None or edited_orig == new_onset:
+            try:
+                if hasattr(self, '_currently_editing_anchor'):
+                    edited_orig = self._currently_editing_anchor
+            except Exception:
+                pass
         for other_onset in onsets_list:
             if other_onset in exclude_onsets:
                 continue
             other_offset = offsets_map.get(other_onset, other_onset)
+            # Never propose the edited event itself
+            if other_onset == new_onset and other_offset == new_offset:
+                continue
+            # If we track original_onsets, never propose events sharing the same original anchor
+            try:
+                other_orig = self.original_onsets.get(other_onset, other_onset)
+                if edited_orig is not None and other_orig == edited_orig:
+                    continue
+            except Exception:
+                pass
             if new_onset < other_onset and new_offset > other_offset:
                 overlapped.append((other_onset, other_offset, onset_types.get(other_onset, 'unknown')))
         for onset, offset, event_type in overlapped:

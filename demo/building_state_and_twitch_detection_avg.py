@@ -13,6 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import tifffile
+import cv2
 from skimage import filters
 from scipy.ndimage import label
 from scipy.signal import savgol_filter
@@ -75,6 +76,7 @@ movie_path = os.path.join(subject_path, 'cam_crop.tif')
 
 # Optional: allow external motion energy path via CLI argument
 external_me_path = None
+video_input_path = None  # allow passing a video path (tif/tiff/avi) via CLI
 # Optional method overrides via CLI (positional):
 # argv[1] = motion_energy.npy (optional)
 # argv[2] = binary method (one of: otsu, li, mean_sd)
@@ -83,12 +85,18 @@ binary_method = 'otsu'
 twitch_method = 'li'
 if len(sys.argv) > 1 and isinstance(sys.argv[1], str):
     candidate = sys.argv[1]
-    if os.path.exists(candidate) and candidate.lower().endswith('.npy'):
-        external_me_path = os.path.abspath(candidate)
-        # If external motion energy provided, override subject/save dirs to that file's folder
-        subject_path = os.path.dirname(external_me_path)
-        movie_path = None  # not used in this mode
-    # If first arg is not a path, treat it as method (allow calling without ME path)
+    if os.path.exists(candidate):
+        lc = candidate.lower()
+        if lc.endswith('.npy'):
+            external_me_path = os.path.abspath(candidate)
+            subject_path = os.path.dirname(external_me_path)
+            movie_path = None
+        elif lc.endswith(('.tif', '.tiff', '.avi')):
+            video_input_path = os.path.abspath(candidate)
+            subject_path = os.path.dirname(video_input_path)
+            movie_path = video_input_path
+        else:
+            pass
     elif sys.argv[1].lower() in {'otsu','li','mean_sd'}:
         binary_method = sys.argv[1].lower()
 if len(sys.argv) > 2:
@@ -152,36 +160,68 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
 
         raise ValueError('Please provide the tiff for the initial run') 
     
-    # Load the TIFF movie (multi-frame TIFF)
-    movie = tifffile.imread(movie_path)
-    num_frames, height, width = movie.shape
+    # Handle TIFF stacks and AVI videos
+    ext = os.path.splitext(movie_path)[1].lower()
+    if ext in ('.tif', '.tiff'):
+        movie = tifffile.imread(movie_path)
+        num_frames, height, width = movie.shape
+        print(f'Loaded TIFF with {num_frames} frames, height={height}, width={width}')
 
-    print(f'Loaded movie with {num_frames} frames, height={height}, width={width}')
+        motion_energy = np.zeros(num_frames)
+        img_prev = movie[0].astype(np.float32)
+        for i in range(1, num_frames):
+            img = movie[i].astype(np.float32)
+            diff = img - img_prev
+            squared_diff = diff * diff
+            motion_energy[i] = float(np.sum(squared_diff))
+            img_prev = img
+            if i % 1000 == 0:
+                print(f'Done computing for {i}/{num_frames} frames')
+        motion_energy = motion_energy[1:]
+    elif ext == '.avi':
+        cap = cv2.VideoCapture(movie_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Failed to open video: {movie_path}")
+        ret, frame_prev = cap.read()
+        if not ret:
+            cap.release()
+            raise RuntimeError("Failed to read first frame from video")
+        frame_prev = cv2.cvtColor(frame_prev, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        me_values = []
+        idx = 1
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            diff = gray - frame_prev
+            squared_diff = diff * diff
+            me_values.append(float(np.sum(squared_diff)))
+            frame_prev = gray
+            if idx % 1000 == 0:
+                print(f'Done computing for {idx} frames')
+            idx += 1
+        cap.release()
+        motion_energy = np.array(me_values, dtype=np.float64)
+        print(f'Loaded AVI with {len(motion_energy)} ME frames')
+    else:
+        raise ValueError(f"Unsupported video format: {ext}")
 
-    # Initialize motion energy array
-    motion_energy = np.zeros(num_frames)
-    img_prev = movie[0]
-
-    # Iterate over the frames and compute motion energy
-    for i in range(1, num_frames):
-        img = movie[i]
-
-        # Compute motion energy as squared differences between consecutive frames
-        diff = img - img_prev
-        squared_diff = diff ** 2
-        motion_energy[i] = np.sum(squared_diff)
-
-        # Update img_prev for the next iteration
-        img_prev = img
-
-        # Print progress every 1000 frames
-        if i % 1000 == 0:
-            print(f'Done computing for {i}/{num_frames} frames')
-    
     # Normalize motion energy
-    motion_energy = motion_energy[1:]  # Skip the first frame (no previous frame to compare)
-    motion_energy /= np.max(motion_energy)
-    
+    if motion_energy.size > 0:
+        maxv = np.max(motion_energy)
+        if maxv > 0:
+            motion_energy = motion_energy / maxv
+
+    # Save to disk for reuse
+    if save_path is not None:
+        try:
+            os.makedirs(save_path, exist_ok=True)
+            np.save(os.path.join(save_path, 'motion_energy.npy'), motion_energy)
+            print(f"Saved motion_energy.npy to {save_path}")
+        except Exception as e:
+            print(f"Warning: could not save motion_energy.npy: {e}")
+
     return motion_energy
 
 # Load motion energy: prefer external path if provided, else compute from video
@@ -189,7 +229,9 @@ if external_me_path is not None:
     print(f"Loading external motion energy: {external_me_path}")
     motion_energy_orig = np.load(external_me_path)
 else:
-    motion_energy_orig = compute_motion_energy(movie_path=movie_path, xrange=None, yrange=None, save_path=subject_path)
+    # If a video path was passed via CLI, prefer that; otherwise use default movie_path
+    chosen_movie = video_input_path if video_input_path is not None else movie_path
+    motion_energy_orig = compute_motion_energy(movie_path=chosen_movie, xrange=None, yrange=None, save_path=os.path.dirname(chosen_movie) if chosen_movie else subject_path)
 
 # if len(motion_energy) != 3600:
 #     motion_energy = pad(motion_energy)
