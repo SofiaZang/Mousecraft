@@ -17,8 +17,8 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize, QSettings
 from PyQt5.QtCore import QProcess
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 import os
 from PyQt5.QtWidgets import QStyle
@@ -26,6 +26,7 @@ import csv
 from PyQt5.QtWidgets import QScrollArea
 from collections import Counter
 import random
+import pathlib
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -38,24 +39,103 @@ class DraggableTimeline(FigureCanvas):
         self.fig = Figure(figsize=(10, 4.0))  # Increased height for better visibility
         super().__init__(self.fig)
         self.setParent(parent)
-        
+        # Create a single axes and set margins
         self.ax = self.fig.add_subplot(111)
-        # Ensure margins so x ticks aren't hidden and top is neat
         try:
             self.fig.subplots_adjust(bottom=0.25, top=0.95)
         except Exception:
             pass
+        # Initial state
         self.current_frame = 0
         self.total_frames = 0
         self.motion_energy = None
         self.onsets = []
-        self.onset_types = {}  # 'active' or 'twitch'
-        self.onset_validations = {}  # 'accepted', 'rejected', 'edited'
-        self.event_offsets = {}  # Store offset frames for events
-        
+        self.onset_types = {}
+        self.onset_validations = {}
+        self.event_offsets = {}
         self.timeline_line = None
         self.dragging = False
         self.connect_events()
+        
+    # === Busy overlay helpers ===
+    def _init_busy_overlay(self):
+        try:
+            self.busy_overlay = QWidget(self)
+            self.busy_overlay.setStyleSheet("background: rgba(0,0,0,0.35);")
+            self.busy_overlay.hide()
+
+            layout = QVBoxLayout(self.busy_overlay)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+
+            # Optional spinner
+            spinner = QLabel(self.busy_overlay)
+            spinner.setAlignment(Qt.AlignCenter)
+            spinner_path = os.path.join(SCRIPT_DIR, 'resources', 'spinner.gif')
+            if os.path.exists(spinner_path):
+                try:
+                    movie = QMovie(spinner_path)
+                    spinner.setMovie(movie)
+                    movie.start()
+                except Exception:
+                    pass
+
+            self._busy_text = QLabel("Saving…", self.busy_overlay)
+            self._busy_text.setAlignment(Qt.AlignCenter)
+            self._busy_text.setStyleSheet("color: white; font-size: 28px; font-weight: 600;")
+
+            # Optional progress bar
+            from PyQt5.QtWidgets import QProgressBar
+            self._busy_progress = QProgressBar(self.busy_overlay)
+            try:
+                self._busy_progress.setRange(0, 100)
+                self._busy_progress.setValue(0)
+                self._busy_progress.setTextVisible(True)
+                self._busy_progress.setStyleSheet(
+                    "QProgressBar { color: white; background: rgba(255,255,255,0.2); border: 1px solid white; }"
+                )
+                self._busy_progress.hide()
+            except Exception:
+                pass
+
+            layout.addStretch(1)
+            layout.addWidget(spinner)
+            layout.addWidget(self._busy_text)
+            layout.addWidget(self._busy_progress)
+            layout.addStretch(1)
+        except Exception:
+            self.busy_overlay = None
+            self._busy_text = None
+            self._busy_progress = None
+
+    def show_busy_overlay(self, text="Saving…"):
+        try:
+            if self.busy_overlay is None:
+                return
+            if self._busy_text is not None:
+                self._busy_text.setText(text)
+            self.busy_overlay.setGeometry(0, 0, self.width(), self.height())
+            self.busy_overlay.show()
+            QApplication.setOverrideCursor(Qt.BusyCursor)
+        except Exception:
+            pass
+
+    def hide_busy_overlay(self):
+        try:
+            if self.busy_overlay is not None:
+                self.busy_overlay.hide()
+            QApplication.restoreOverrideCursor()
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        try:
+            if getattr(self, 'busy_overlay', None) is not None and self.busy_overlay.isVisible():
+                self.busy_overlay.setGeometry(0, 0, self.width(), self.height())
+        except Exception:
+            pass
+        super().resizeEvent(event)
+
         
     def connect_events(self):
         self.mpl_connect('button_press_event', self.on_press)
@@ -99,6 +179,16 @@ class DraggableTimeline(FigureCanvas):
         
     def plot_motion_energy(self, motion_energy, onsets=None, onset_types=None, event_offsets=None, event_status=None):
         import numpy as np
+        # Hard reset: clear figure and recreate a single axes
+        try:
+            self.fig.clf()
+        except Exception:
+            pass
+        self.ax = self.fig.add_subplot(111)
+        try:
+            self.fig.subplots_adjust(bottom=0.25, top=0.95)
+        except Exception:
+            pass
 
         self.motion_energy = motion_energy
         self.total_frames = len(motion_energy)
@@ -114,7 +204,6 @@ class DraggableTimeline(FigureCanvas):
                 'complex': 'cyan',
             }
 
-        self.ax.clear()
         self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='#1f77b4', linewidth=1)
 
         # Determine which event types to display (if restricted)
@@ -177,8 +266,9 @@ class DraggableTimeline(FigureCanvas):
                 color = 'gray'  # Fallback for any other cases
             self.ax.plot(onset, max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
 
-        self.ax.set_xlim(0, max(self.total_frames, 1000))
-        self.ax.set_ylim(0, max(self.motion_energy) * 1.2)  # Increased ylim to accommodate bullets
+        # X axis covers available frames
+        self.ax.set_xlim(0, max(1, self.total_frames))
+        # Do NOT set a naive ylim here; will use robust percentile scaling below including marker level
         self.ax.set_ylabel("motion_energy", fontsize=7)
         self.ax.set_xlabel("Frame", fontsize=7)
         # Remove top/right spines and ensure only bottom/left axes are shown
@@ -187,15 +277,71 @@ class DraggableTimeline(FigureCanvas):
             self.ax.spines['right'].set_visible(False)
             self.ax.xaxis.set_ticks_position('bottom')
             self.ax.yaxis.set_ticks_position('left')
+            # Disable minor ticks to avoid tiny overlapping labels
+            self.ax.minorticks_off()
         except Exception:
             pass
         self.ax.set_title("classified motion", fontsize=9)
         self.ax.set_yticks([])
         self.ax.tick_params(axis='x', labelsize=6)
 
+        # Reset timeline line reference; it will be redrawn by update_timeline
+        self.timeline_line = None
+        # Ensure x-limits reflect new data to avoid showing pre-values
+        try:
+            self.ax.set_xlim(0, max(1, self.total_frames))
+        except Exception:
+            pass
+        # Initial y autoscale to full data (robust: 1st-99th percentile)
+        try:
+            if self.total_frames > 0:
+                arr = np.asarray(self.motion_energy, dtype=float)
+                # Handle NaNs/Infs gracefully
+                arr = arr[np.isfinite(arr)] if arr.size > 0 else arr
+                if arr.size == 0:
+                    lo, hi = 0.0, 1.0
+                else:
+                    lo = float(np.percentile(arr, 1))
+                    hi = float(np.percentile(arr, 99))
+                    if hi <= lo:
+                        hi = lo + 1.0
+                # Ensure markers plotted at ~max(motion_energy)*1.05 remain visible without compressing trace
+                marker_level = float(np.nanmax(self.motion_energy)) * 1.05 if np.size(self.motion_energy) else hi
+                pad = 0.1 * (hi - lo)
+                y_min = max(0.0, lo - pad)
+                y_max = max(hi + pad, marker_level * 1.05)
+                if y_max - y_min < 1e-6:
+                    y_max = y_min + 1.0
+                self.ax.set_ylim(y_min, y_max)
+        except Exception:
+            pass
         self.fig.tight_layout()
         self.fig.canvas.draw_idle()
+        # After initial draw, ensure y-range is matched to current viewport as well
         self.update_timeline()
+        self.adjust_ylim_to_view()
+
+    def adjust_ylim_to_view(self):
+        """Autoscale Y to the motion_energy range within the current X viewport (robust percentiles)."""
+        try:
+            import numpy as np
+            if getattr(self, 'motion_energy', None) is None:
+                return
+            x0, x1 = self.ax.get_xlim()
+            left = max(0, int(np.floor(x0)))
+            right = min(int(np.ceil(x1)), len(self.motion_energy))
+            if right <= left:
+                return
+            window = np.asarray(self.motion_energy[left:right])
+            lo = float(np.percentile(window, 1)) if window.size > 0 else 0.0
+            hi = float(np.percentile(window, 99)) if window.size > 0 else 1.0
+            if hi <= lo:
+                hi = lo + 1.0
+            pad = 0.1 * (hi - lo)
+            self.ax.set_ylim(max(0.0, lo - pad), hi + pad)
+            self.draw()
+        except Exception:
+            pass
         
     def plot_motion_energy_preserve_view(self, *args, **kwargs):
         try:
@@ -207,8 +353,20 @@ class DraggableTimeline(FigureCanvas):
         self.plot_motion_energy(*args, **kwargs)
         if xlim is not None and ylim is not None:
             try:
-                self.ax.set_xlim(xlim)
-                self.ax.set_ylim(ylim)
+                # Only restore previous xlim if it looks valid (not the default [0,1])
+                span = xlim[1] - xlim[0]
+                total = max(1, getattr(self, 'total_frames', 1))
+                looks_default = abs(xlim[0]) < 1e-6 and abs(xlim[1] - 1.0) < 1e-6
+                if not looks_default and span > 5:
+                    # Clamp to new data bounds
+                    new_left = max(0, min(xlim[0], total - 1))
+                    new_right = max(new_left + 1, min(xlim[1], total))
+                    self.ax.set_xlim(new_left, new_right)
+                else:
+                    # Keep autoscaled limits (based on new data) to avoid bogus 0..1 axis
+                    pass
+                # After xlim restore, adjust y to visible window for readability
+                self.adjust_ylim_to_view()
             except Exception:
                 pass
         self.update_timeline()
@@ -259,6 +417,8 @@ class DraggableTimeline(FigureCanvas):
             new_width = width * 2
         new_xlim = (max(center - new_width/2, 0), min(center + new_width/2, self.total_frames))
         ax.set_xlim(new_xlim)
+        # After changing the X view, auto-scale Y to the visible data range (robust percentiles)
+        self.adjust_ylim_to_view()
         self.draw()
         event.accept()
 
@@ -309,6 +469,12 @@ class MotionAnnotator(QWidget):
         self.fps = 1  # Initialisation par défaut à 1 dans __init__
         self.current_frame = 0
         self.playback_speed = 1.0
+        # TIFF handling
+        self.is_tiff = False
+        self.tiff_reader = None  # tifffile.TiffFile instance for primary
+        # Second camera TIFF handling
+        self.is_tiff2 = False
+        self.tiff_reader2 = None  # tifffile.TiffFile instance for secondary
         
         self.motion_energy = None
         self.classified_events = {}
@@ -350,7 +516,6 @@ class MotionAnnotator(QWidget):
 
         # Palette de couleurs pour nouveaux types (cycle stable)
         self._auto_palette = [
-            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
             "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
         ]
 
@@ -359,7 +524,88 @@ class MotionAnnotator(QWidget):
         self.unsaved_changes = False  # Track unsaved changes
         self.setup_auto_save(interval_minutes=20)
 
-        
+        # Initialize busy overlay (hidden by default)
+        self._init_busy_overlay()
+
+        # Periodic mouse animation every 10 minutes
+        try:
+            self.periodic_mouse_timer = QTimer(self)
+            self.periodic_mouse_timer.setInterval(10 * 60 * 1000)  # 10 minutes
+            self.periodic_mouse_timer.timeout.connect(self._maybe_show_mouse)
+            self.periodic_mouse_timer.start()
+        except Exception:
+            pass
+
+    def _maybe_show_mouse(self):
+        # Helper method to call the animation safely
+        try:
+            self.start_mouse_timer()
+        except Exception:
+            pass
+
+    # === Busy overlay helpers (for the main window) ===
+    def _init_busy_overlay(self):
+        try:
+            self.busy_overlay = QWidget(self)
+            self.busy_overlay.setStyleSheet("background: rgba(0,0,0,0.35);")
+            self.busy_overlay.hide()
+
+            layout = QVBoxLayout(self.busy_overlay)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+
+            # Optional spinner
+            spinner = QLabel(self.busy_overlay)
+            spinner.setAlignment(Qt.AlignCenter)
+            spinner_path = os.path.join(SCRIPT_DIR, 'resources', 'spinner.gif')
+            if os.path.exists(spinner_path):
+                try:
+                    movie = QMovie(spinner_path)
+                    spinner.setMovie(movie)
+                    movie.start()
+                except Exception:
+                    pass
+
+            self._busy_text = QLabel("Saving…", self.busy_overlay)
+            self._busy_text.setAlignment(Qt.AlignCenter)
+            self._busy_text.setStyleSheet("color: white; font-size: 28px; font-weight: 600;")
+
+            layout.addStretch(1)
+            layout.addWidget(spinner)
+            layout.addWidget(self._busy_text)
+            layout.addStretch(1)
+        except Exception:
+            self.busy_overlay = None
+            self._busy_text = None
+
+    def show_busy_overlay(self, text="Saving…"):
+        try:
+            if getattr(self, 'busy_overlay', None) is None:
+                return
+            if getattr(self, '_busy_text', None) is not None:
+                self._busy_text.setText(text)
+            self.busy_overlay.setGeometry(0, 0, self.width(), self.height())
+            self.busy_overlay.show()
+            QApplication.setOverrideCursor(Qt.BusyCursor)
+        except Exception:
+            pass
+
+    def hide_busy_overlay(self):
+        try:
+            if getattr(self, 'busy_overlay', None) is not None:
+                self.busy_overlay.hide()
+            QApplication.restoreOverrideCursor()
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        try:
+            if getattr(self, 'busy_overlay', None) is not None and self.busy_overlay.isVisible():
+                self.busy_overlay.setGeometry(0, 0, self.width(), self.height())
+        except Exception:
+            pass
+        super().resizeEvent(event)
+
     def init_ui(self):
         main_layout = QVBoxLayout()
         # Add MouseCraft logo at the top, centered
@@ -777,6 +1023,9 @@ class MotionAnnotator(QWidget):
         # Remove shift left/right buttons and their layout
         # Add edit widgets (hidden by default)
         # (undo_layout will be added at the end, after all widgets)
+        # Keep references for later layout refreshes
+        self.onset_layout = onset_layout
+        self.onset_group = onset_group
         onset_group.setLayout(onset_layout)
         # Groupe Save & Export
         save_group = QGroupBox("Save & Export")
@@ -927,11 +1176,72 @@ class MotionAnnotator(QWidget):
                         if path:
                             self.video_path_edit.setText(path)
                             self.radio_video.setChecked(True)
+                            # Try to auto-read FPS
+                            try:
+                                import cv2
+                                cap = cv2.VideoCapture(path)
+                                fps = cap.get(cv2.CAP_PROP_FPS)
+                                cap.release()
+                                if fps and fps > 0:
+                                    self.fps_edit.setText(str(int(fps)))
+                            except Exception:
+                                pass
                             self._update_ok_enabled()
                     browse_btn.clicked.connect(on_browse)
+                    # Keep a handle to toggle enabled state later
+                    self.browse_btn = browse_btn
                     vid_box.addWidget(self.video_path_edit)
                     vid_box.addWidget(browse_btn)
                     layout.addLayout(vid_box)
+
+                    # FPS input (raw video FPS)
+                    fps_box = QHBoxLayout()
+                    fps_box.addWidget(QLabel("Video FPS (raw):"))
+                    self.fps_edit = QLineEdit()
+                    from PyQt5.QtGui import QIntValidator
+                    self.fps_edit.setValidator(QIntValidator(1, 1000, self))
+                    self.fps_edit.setPlaceholderText("e.g. 30")
+                    fps_box.addWidget(self.fps_edit)
+                    layout.addLayout(fps_box)
+
+                    # Average factor input (frames per bin) – REQUIRED
+                    avg_box = QHBoxLayout()
+                    avg_box.addWidget(QLabel("Average factor (frames) – required:"))
+                    self.avg_edit = QLineEdit()
+                    self.avg_edit.setValidator(QIntValidator(1, 1000, self))
+                    self.avg_edit.setPlaceholderText("enter a positive integer, e.g. 5 (use 1 for no averaging)")
+                    # No default text: force the user to specify a value
+                    self.avg_edit.setText("")
+                    avg_box.addWidget(self.avg_edit)
+                    layout.addLayout(avg_box)
+
+                    # Compute scope: all vs part
+                    scope_group = QGroupBox("Compute scope")
+                    scope_layout = QVBoxLayout()
+                    scope_radios = QHBoxLayout()
+                    self.radio_all = QRadioButton("Compute all")
+                    self.radio_part = QRadioButton("Compute a part")
+                    self.radio_all.setChecked(True)
+                    scope_radios.addWidget(self.radio_all)
+                    scope_radios.addWidget(self.radio_part)
+                    scope_layout.addLayout(scope_radios)
+                    # Start/End inputs
+                    range_layout = QHBoxLayout()
+                    range_layout.addWidget(QLabel("Start frame:"))
+                    self.start_edit = QLineEdit()
+                    self.start_edit.setValidator(QIntValidator(0, 10**9, self))
+                    self.start_edit.setPlaceholderText("0")
+                    self.start_edit.setEnabled(False)
+                    range_layout.addWidget(self.start_edit)
+                    range_layout.addWidget(QLabel("End frame:"))
+                    self.end_edit = QLineEdit()
+                    self.end_edit.setValidator(QIntValidator(1, 10**9, self))
+                    self.end_edit.setPlaceholderText("e.g. 36000")
+                    self.end_edit.setEnabled(False)
+                    range_layout.addWidget(self.end_edit)
+                    scope_layout.addLayout(range_layout)
+                    scope_group.setLayout(scope_layout)
+                    layout.addWidget(scope_group)
 
                     # Availability: enable/disable radios based on context
                     me_path_local = getattr(parent, 'motion_energy_path', None)
@@ -942,6 +1252,16 @@ class MotionAnnotator(QWidget):
                     # If a video is already loaded, pre-fill but keep picker enabled so user can select a different raw file (e.g., original TIFF)
                     if has_video:
                         self.video_path_edit.setText(video_path_local)
+                        # Try to prefill FPS from loaded video
+                        try:
+                            import cv2
+                            cap = cv2.VideoCapture(video_path_local)
+                            fps = cap.get(cv2.CAP_PROP_FPS)
+                            cap.release()
+                            if fps and fps > 0:
+                                self.fps_edit.setText(str(int(fps)))
+                        except Exception:
+                            pass
                         # keep enabled
                     # Default selection
                     if has_me and not has_video:
@@ -1020,11 +1340,43 @@ class MotionAnnotator(QWidget):
                     # Default larger size for readability
                     self.resize(720, 420)
 
-                    # Live enable/disable of OK button
+                    # Live enable/disable of OK button and source widgets
+                    def _update_sources_enabled():
+                        use_video = self.radio_video.isChecked()
+                        # Enable/disable video-related widgets
+                        self.video_path_edit.setEnabled(use_video)
+                        if hasattr(self, 'browse_btn'):
+                            self.browse_btn.setEnabled(use_video)
+                        self.fps_edit.setEnabled(use_video)
+                        # Averaging: required for video, disabled for precomputed ME
+                        if use_video:
+                            self.avg_edit.setEnabled(True)
+                            if self.avg_edit.text().strip() == "":
+                                self.avg_edit.setPlaceholderText("enter a positive integer, e.g. 5 (use 1 for no averaging)")
+                        else:
+                            self.avg_edit.setEnabled(False)
+                            self.avg_edit.setPlaceholderText("Averaging disabled for precomputed ME; smoothing still applies")
+
+                    self._update_sources_enabled = _update_sources_enabled
+
                     self.radio_video.toggled.connect(self._update_ok_enabled)
                     self.radio_me.toggled.connect(self._update_ok_enabled)
+                    self.radio_video.toggled.connect(self._update_sources_enabled)
+                    self.radio_me.toggled.connect(self._update_sources_enabled)
                     self.video_path_edit.textChanged.connect(self._update_ok_enabled)
+                    self.avg_edit.textChanged.connect(self._update_ok_enabled)
+                    # Enable/disable range inputs based on scope selection
+                    def _update_range_enabled():
+                        part = self.radio_part.isChecked()
+                        self.start_edit.setEnabled(part)
+                        self.end_edit.setEnabled(part)
+                        self._update_ok_enabled()
+                    self.radio_all.toggled.connect(_update_range_enabled)
+                    self.radio_part.toggled.connect(_update_range_enabled)
+                    self.start_edit.textChanged.connect(self._update_ok_enabled)
+                    self.end_edit.textChanged.connect(self._update_ok_enabled)
                     self._update_ok_enabled()
+                    self._update_sources_enabled()
 
                 def _update_ok_enabled(self):
                     want_video = self.radio_video.isChecked()
@@ -1033,6 +1385,23 @@ class MotionAnnotator(QWidget):
                         ok = len(self.video_path_edit.text().strip()) > 0 and os.path.exists(self.video_path_edit.text().strip())
                     else:
                         ok = self.radio_me.isEnabled()  # enabled only if ME is available
+                    # Require averaging only when computing from video
+                    if ok and want_video:
+                        avg_txt = self.avg_edit.text().strip()
+                        ok = avg_txt.isdigit() and int(avg_txt) >= 1
+                    # If computing only a part, validate range
+                    if ok and self.radio_part.isChecked():
+                        try:
+                            s_txt = self.start_edit.text().strip()
+                            e_txt = self.end_edit.text().strip()
+                            if len(s_txt) == 0 or len(e_txt) == 0:
+                                ok = False
+                            else:
+                                s = int(s_txt)
+                                e = int(e_txt)
+                                ok = (s >= 0 and e > s)
+                        except Exception:
+                            ok = False
                     self.ok_btn.setEnabled(bool(ok))
 
             dlg = ThresholdDialog(self)
@@ -1062,8 +1431,34 @@ class MotionAnnotator(QWidget):
                 settings.setValue('twitch_method', chosen_twitch)
             except Exception:
                 pass
-            # Add thresholds and no-plots flag (prevents blocking GUI by plt.show)
-            args.extend([chosen_binary, chosen_twitch, '--no-plots'])
+            # Add thresholds, optional FPS, and no-plots flag (prevents blocking GUI by plt.show)
+            args.extend([chosen_binary, chosen_twitch])
+            fps_txt = dlg.fps_edit.text().strip()
+            if fps_txt.isdigit():
+                args.extend(['--fps', fps_txt])
+            # Averaging handling
+            if dlg.radio_me.isChecked():
+                # For precomputed Motion Energy, force no averaging and rely on smoothing in the script
+                args.extend(['--avg', '1'])
+            else:
+                # Validate and add average factor (MANDATORY for video)
+                try:
+                    avg_txt = dlg.avg_edit.text().strip()
+                except Exception:
+                    avg_txt = ''
+                if not (avg_txt.isdigit() and int(avg_txt) >= 1):
+                    QMessageBox.critical(self, "Missing averaging value", "Veuillez saisir un facteur de moyenne (entier >= 1).\nEnter an averaging factor in the dialog (use 1 for no averaging).")
+                    return
+                args.extend(['--avg', avg_txt])
+            # Add optional start/end range
+            if dlg.radio_part.isChecked():
+                try:
+                    s = int(dlg.start_edit.text().strip())
+                    e = int(dlg.end_edit.text().strip())
+                    args.extend(['--start', str(s), '--end', str(e)])
+                except Exception:
+                    pass
+            args.append('--no-plots')
 
             # Non-blocking execution with live log dialog
             log_dialog = QDialog(self)
@@ -1130,6 +1525,11 @@ class MotionAnnotator(QWidget):
                         loaded_labels = False
                 close_btn.setEnabled(True)
                 cancel_btn.setEnabled(False)
+                # Hide busy overlay when done
+                try:
+                    self.hide_busy_overlay()
+                except Exception:
+                    pass
                 if success and loaded_labels:
                     log_view.append("\n✅ Done. mousecraft_auto_labels.csv loaded into the timeline.")
                 elif success:
@@ -1181,6 +1581,11 @@ class MotionAnnotator(QWidget):
                 except Exception:
                     pass
                 cancel_btn.setEnabled(False)
+                # Hide overlay on cancel
+                try:
+                    self.hide_busy_overlay()
+                except Exception:
+                    pass
 
             cancel_btn.clicked.connect(_on_cancel)
             close_btn.clicked.connect(log_dialog.accept)
@@ -1188,6 +1593,11 @@ class MotionAnnotator(QWidget):
 
             # Start process
             program = sys.executable
+            # Show a global overlay while analysis runs
+            try:
+                self.show_busy_overlay("Analyzing…")
+            except Exception:
+                pass
             proc.start(program, args[1:])
             log_dialog.exec_()
         except Exception as e:
@@ -1222,13 +1632,42 @@ class MotionAnnotator(QWidget):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Video', '', 'Videos (*.avi *.mp4 *.mov *.mkv *.tiff *.tif)')
         if fname:
             self.video_path = fname
-            self.cap = cv2.VideoCapture(self.video_path)
-            
-            if not self.cap.isOpened():
-                QMessageBox.critical(self, "Error", "Could not open video file")
-                return
-                
-            self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            lower = pathlib.Path(fname).suffix.lower()
+            # Reset previous readers
+            self.is_tiff = False
+            if getattr(self, 'tiff_reader', None) is not None:
+                try:
+                    self.tiff_reader.close()
+                except Exception:
+                    pass
+                self.tiff_reader = None
+            if lower in ['.tif', '.tiff']:
+                # Open as TIFF stack
+                try:
+                    import tifffile
+                except Exception:
+                    QMessageBox.critical(self, 'Missing dependency', 'Reading .tif/.tiff requires the "tifffile" package. Install with:\n\npip install tifffile')
+                    return
+                try:
+                    self.tiff_reader = tifffile.TiffFile(self.video_path)
+                except Exception as e:
+                    QMessageBox.critical(self, 'Error', f'Could not open TIFF file:\n{e}')
+                    self.tiff_reader = None
+                    return
+                self.is_tiff = True
+                self.cap = None
+                try:
+                    self.total_frames = len(self.tiff_reader.pages)
+                except Exception:
+                    # Fallback: single image
+                    self.total_frames = 1
+            else:
+                # Open with OpenCV video capture
+                self.cap = cv2.VideoCapture(self.video_path)
+                if not self.cap.isOpened():
+                    QMessageBox.critical(self, "Error", "Could not open video file")
+                    return
+                self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
             # self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))  # Ne pas écraser le FPS choisi
             # self.fps_lineedit.setText("")  # Ne pas vider le champ FPS
             self.frame_slider.setMaximum(self.total_frames - 1)
@@ -1258,12 +1697,37 @@ class MotionAnnotator(QWidget):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Second Video', '', 'Videos (*.avi *.mp4 *.mov *.mkv *.tiff *.tif)')
         if not fname:
             return
+        import pathlib as _pl
         self.second_video_path = fname
-        self.cap2 = cv2.VideoCapture(self.second_video_path)
-        if not self.cap2.isOpened():
-            QMessageBox.critical(self, "Error", "Could not open second video file")
+        lower2 = _pl.Path(fname).suffix.lower()
+        # Reset previous secondary readers
+        self.is_tiff2 = False
+        if getattr(self, 'tiff_reader2', None) is not None:
+            try:
+                self.tiff_reader2.close()
+            except Exception:
+                pass
+            self.tiff_reader2 = None
+        if lower2 in ['.tif', '.tiff']:
+            try:
+                import tifffile
+            except Exception:
+                QMessageBox.critical(self, 'Missing dependency', 'Reading .tif/.tiff requires the "tifffile" package. Install with:\n\npip install tifffile')
+                return
+            try:
+                self.tiff_reader2 = tifffile.TiffFile(self.second_video_path)
+            except Exception as e:
+                QMessageBox.critical(self, 'Error', f'Could not open TIFF file (second camera):\n{e}')
+                self.tiff_reader2 = None
+                return
+            self.is_tiff2 = True
             self.cap2 = None
-            return
+        else:
+            self.cap2 = cv2.VideoCapture(self.second_video_path)
+            if not self.cap2.isOpened():
+                QMessageBox.critical(self, "Error", "Could not open second video file")
+                self.cap2 = None
+                return
         # Show second camera label and set equal share between cameras without changing overall panel layout
         self.second_video_label.show()
         # Allow the first camera to shrink to half by removing its large minimum size
@@ -1311,21 +1775,16 @@ class MotionAnnotator(QWidget):
             self.maybe_start_auto_save()
             
     def prepare_motion_energy(self):
-        """Pad motion energy to divisible by 5 and average"""
+        """Prepare motion energy without re-averaging.
+        Keep the loaded array as-is (already averaged upstream if needed).
+        Only ensure dtype and update UI bounds.
+        """
         if self.motion_energy is None:
             return
-        # Ensure numpy float64 array
+        # Ensure numpy float64 array (no averaging here)
         self.motion_energy = np.asarray(self.motion_energy, dtype=np.float64)
-        # Pad to make divisible by 5
-        remainder = len(self.motion_energy) % 5
-        if remainder != 0:
-            padding_needed = 5 - remainder
-            self.motion_energy = np.pad(self.motion_energy, (0, padding_needed), mode='edge')
-        # Reshape and average
-        new_length = len(self.motion_energy) // 5
-        self.motion_energy = self.motion_energy.reshape(new_length, 5).mean(axis=1)
-        # Update total frames
-        self.total_frames = len(self.motion_energy)
+        # Update total frames to current length
+        self.total_frames = int(len(self.motion_energy))
         self.frame_slider.setMaximum(self.total_frames - 1)
         self.onset_spinbox.setMaximum(self.total_frames - 1)
         self.offset_spinbox.setMaximum(self.total_frames - 1)
@@ -2217,12 +2676,42 @@ class MotionAnnotator(QWidget):
             self.video_label.setPixmap(scaled_pixmap)
 
         # Render second camera if available
-        if hasattr(self, 'cap2') and self.cap2 is not None and self.second_video_label.isVisible():
+        if self.second_video_label.isVisible():
             try:
-                self.cap2.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-                ret2, frame2 = self.cap2.read()
-                if ret2:
-                    frame2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
+                frame2 = None
+                if getattr(self, 'is_tiff2', False):
+                    reader2 = getattr(self, 'tiff_reader2', None)
+                    if reader2 is not None:
+                        try:
+                            page2 = reader2.pages[int(frame_num)]
+                            arr2 = page2.asarray()
+                            import numpy as _np
+                            if arr2.dtype != _np.uint8:
+                                a2 = arr2.astype(_np.float32)
+                                mn2 = _np.nanmin(a2)
+                                mx2 = _np.nanmax(a2)
+                                if mx2 > mn2:
+                                    a2 = (a2 - mn2) / (mx2 - mn2) * 255.0
+                                else:
+                                    a2 = _np.zeros_like(a2) + 0
+                                arr2 = a2.astype(_np.uint8)
+                            if arr2.ndim == 2:
+                                frame2 = cv2.cvtColor(arr2, cv2.COLOR_GRAY2RGB)
+                            elif arr2.ndim == 3 and arr2.shape[2] == 3:
+                                frame2 = arr2
+                            elif arr2.ndim == 3 and arr2.shape[2] == 4:
+                                frame2 = cv2.cvtColor(arr2, cv2.COLOR_RGBA2RGB)
+                            else:
+                                frame2 = _np.repeat(arr2[..., None], 3, axis=2) if arr2.ndim == 2 else arr2[..., :3]
+                        except Exception:
+                            frame2 = None
+                else:
+                    if hasattr(self, 'cap2') and self.cap2 is not None:
+                        self.cap2.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+                        ret2, cvframe2 = self.cap2.read()
+                        if ret2:
+                            frame2 = cv2.cvtColor(cvframe2, cv2.COLOR_BGR2RGB)
+                if frame2 is not None:
                     h2, w2, ch2 = frame2.shape
                     label2_size = self.second_video_label.size()
                     if label2_size.width() > 0 and label2_size.height() > 0:
@@ -2371,6 +2860,14 @@ class MotionAnnotator(QWidget):
             timeline = self.timeline_canvas2
         # Use filtered_onsets for navigation
         if 0 <= idx < len(onsets_list):
+            # Preserve current zoom width before moving
+            try:
+                current_xlim = timeline.ax.get_xlim()
+                view_width = current_xlim[1] - current_xlim[0]
+            except Exception:
+                current_xlim = None
+                view_width = None
+
             self.current_onset_idx = idx
             onset_frame = onsets_list[idx]
             self.current_frame = onset_frame
@@ -2378,6 +2875,43 @@ class MotionAnnotator(QWidget):
             self.show_frame(onset_frame)
             timeline.current_frame = onset_frame
             timeline.update_timeline()
+            # Re-center view keeping same zoom width
+            try:
+                if view_width is not None and view_width > 0:
+                    half = view_width / 2.0
+                    # Determine total frames for clamping
+                    if getattr(self, "active_timeline_index", 1) == 1:
+                        total = getattr(self, 'total_frames', None)
+                        if total is None or total <= 0:
+                            total = len(self.motion_energy) if getattr(self, 'motion_energy', None) is not None else onset_frame + 1
+                    else:
+                        # Secondary timeline total length fallback
+                        total = len(getattr(self.timeline_canvas2, 'motion_energy', [])) if hasattr(self, 'timeline_canvas2') else onset_frame + 1
+                    left = max(0, onset_frame - half)
+                    right = left + view_width
+                    if total and right > total:
+                        right = total
+                        left = max(0, right - view_width)
+                    timeline.ax.set_xlim(left, right)
+                    # Adapt Y to the content in view
+                    try:
+                        timeline.adjust_ylim_to_view()
+                    except Exception:
+                        pass
+                    # Keep secondary timeline aligned if visible
+                    if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+                        try:
+                            self.timeline_canvas2.ax.set_xlim(left, right)
+                            try:
+                                self.timeline_canvas2.adjust_ylim_to_view()
+                            except Exception:
+                                pass
+                            self.timeline_canvas2.draw()
+                        except Exception:
+                            pass
+                timeline.draw()
+            except Exception:
+                pass
             # Only update spinbox if it's not currently being edited
             if not self.frame_spinbox.hasFocus():
                 self.frame_spinbox.blockSignals(True)
@@ -2818,6 +3352,11 @@ Average Score: {avg_score:.3f}
         if not self.curated_events:
             QMessageBox.warning(self, "Warning", "No onsets to save")
             return
+        # Show lightweight busy overlay during save
+        try:
+            self.show_busy_overlay("Saving…")
+        except Exception:
+            pass
         overlaps = self.check_for_overlaps()
         if overlaps:
             overlap_str = "\n".join([f"{a1}-{b1} overlaps {a2}-{b2}" for a1, b1, a2, b2 in overlaps])
@@ -2829,6 +3368,10 @@ Average Score: {avg_score:.3f}
                 QMessageBox.No
             )
             if reply != QMessageBox.Yes:
+                try:
+                    self.hide_busy_overlay()
+                except Exception:
+                    pass
                 return
         # Create a flat list of events with 5 columns each
         export_events = []
@@ -2899,6 +3442,10 @@ Average Score: {avg_score:.3f}
             
         # Après export, reset le flag
         self.unsaved_changes = False
+        try:
+            self.hide_busy_overlay()
+        except Exception:
+            pass
             
     def create_validation_comparison_plot(self, export_events, save_path=None):
         """Create a comparison plot showing original vs validated motion energy classification"""
@@ -3705,9 +4252,18 @@ Average Score: {avg_score:.3f}
     def export_all_outputs(self):
         import pandas as pd
         import os, json
+        # Start busy overlay
+        try:
+            self.show_busy_overlay("Saving…")
+        except Exception:
+            pass
         dir_path = self.export_path_lineedit.text()
         if not dir_path:
             QMessageBox.warning(self, "Export", "Please choose an export directory first.")
+            try:
+                self.hide_busy_overlay()
+            except Exception:
+                pass
             return
         overlaps = self.check_for_overlaps()
         if overlaps:
@@ -3720,6 +4276,10 @@ Average Score: {avg_score:.3f}
                 QMessageBox.No
             )
             if reply != QMessageBox.Yes:
+                try:
+                    self.hide_busy_overlay()
+                except Exception:
+                    pass
                 return
         output_dir = os.path.join(dir_path, 'mousecraft_output')
         os.makedirs(output_dir, exist_ok=True)
@@ -3980,6 +4540,10 @@ Average Score: {avg_score:.3f}
         QMessageBox.information(self, "Export", msg)
         # Après export, reset le flag
         self.unsaved_changes = False
+        try:
+            self.hide_busy_overlay()
+        except Exception:
+            pass
 
     def create_final_classification_plot(self, export_events, save_path=None):
         """Create a plot showing only the final classification (excluding rejected events) and motion energy. No color markers."""
@@ -4097,6 +4661,11 @@ Average Score: {avg_score:.3f}
         # Check if there are no more pending events
         if not any(self.timeline_canvas.onset_validations.get(o, 'pending') == 'pending' for o in self.onsets):
             self.show_firework_animation()
+            # Auto-save immediately when all events are validated (no more pending)
+            try:
+                self.auto_save()
+            except Exception:
+                pass
         # ... rest of the function ...
 
     def show_mouse_animation(self):
@@ -4110,7 +4679,7 @@ Average Score: {avg_score:.3f}
         dialog_width = 1000
         dialog_height = 300
         mouse_path = os.path.join(SCRIPT_DIR, "resources", "mouse.png")
-        bubble_path = os.path.join(SCRIPT_DIR, "resources", "bulle de parole.wepb")  # Use the correct bubble file
+        bubble_path = os.path.join(SCRIPT_DIR, "resources", "bulle de parole.webp")  # corrected extension
         print(f"Mouse path: {mouse_path}")
         print(f"Mouse file exists: {os.path.exists(mouse_path)}")
         print(f"Bubble path: {bubble_path}")
@@ -4346,6 +4915,11 @@ Average Score: {avg_score:.3f}
                 from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.information(self, "Congratulations!", "Congratulations! All events have been validated.")
                 self._firework_shown = True
+                # Auto-save immediately when all events are validated
+                try:
+                    self.auto_save()
+                except Exception:
+                    pass
 
     def maybe_stop_auto_save(self):
         """Stop autosave timer if there are no more pending events."""

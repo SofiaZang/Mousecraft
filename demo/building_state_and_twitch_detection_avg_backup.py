@@ -13,6 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import tifffile
+import cv2
 from skimage import filters
 from scipy.ndimage import label
 from scipy.signal import savgol_filter
@@ -118,21 +119,12 @@ if len(sys.argv) > 3:
 
 # Parse optional flags
 raw_fps = None
-# Default averaging factor (can be overridden by --avg)
-avg_block = 5  # default: average by 5 frames (can be overridden by --avg)
-
 if '--fps' in sys.argv:
     try:
         idx = sys.argv.index('--fps')
         raw_fps = float(sys.argv[idx + 1])
     except Exception:
         raw_fps = None
-if '--avg' in sys.argv:
-    try:
-        idx = sys.argv.index('--avg')
-        avg_block = max(1, int(sys.argv[idx + 1]))
-    except Exception:
-        pass
 if '--start' in sys.argv:
     try:
         idx = sys.argv.index('--start')
@@ -154,7 +146,8 @@ threshold_binary = 'otsu'  # threshold for binary: a/r state detcetion -
 threshold_twitch = 'otsu' #threshold for twitch detection (more permissive -> detect more/lose less)
 # thresh_factor = 1.0  # used for "mean+std" option
 
-# Averaging configuration: avg_block already set above and possibly overridden by --avg
+# Averaging configuration
+avg_block = 5  # frames are averaged by 5 later
 
 # Twitch detection thresholds – framerate in averaged domain
 if raw_fps is not None and raw_fps > 0:
@@ -190,7 +183,7 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
     
     #check if motion energy has already been computed, if that's the case load it
 
-    motion_energy_path = os.path.join(save_path,"motion_energy_pure.npy")
+    motion_energy_path = os.path.join(save_path,"motion_energy.npy")
     if os.path.exists(motion_energy_path):
 
         print(f'Motion energy already computed. Loading from {motion_energy_path}')
@@ -229,15 +222,6 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
                     print(f'Done computing for {i}/{num_frames} frames')
             motion_energy = np.array(me_values, dtype=np.float64)
     elif ext == '.avi':
-        # Lazy import OpenCV only if we actually read an AVI
-        try:
-            import cv2
-        except Exception as e:
-            raise ImportError(
-                "Failed to import OpenCV (cv2) required for AVI reading. "
-                "If you don't need AVI, provide a TIFF/NPY instead, or install opencv-python. "
-                "On Windows, you may also need to increase the paging file (virtual memory) if you see 'pagefile insufficient'."
-            ) from e
         cap = cv2.VideoCapture(movie_path)
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open video: {movie_path}")
@@ -288,11 +272,11 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
             os.makedirs(save_path, exist_ok=True)
             # Avoid overwriting full ME if a subset was computed
             if start_frame is None and end_frame is None:
-                out_name = 'motion_energy_pure.npy'
+                out_name = 'motion_energy.npy'
             else:
                 s = 0 if start_frame is None else start_frame
                 e = 'end' if end_frame is None else end_frame
-                out_name = f'motion_energy_pure_subset_{s}_{e}.npy'
+                out_name = f'motion_energy_subset_{s}_{e}.npy'
             np.save(os.path.join(save_path, out_name), motion_energy)
             print(f"Saved {out_name} to {save_path}")
         except Exception as e:
@@ -317,24 +301,10 @@ else:
         movie_path=chosen_movie,
         xrange=None,
         yrange=None,
-        save_path=str(save_dir_videography),
+        save_path=os.path.dirname(chosen_movie) if chosen_movie else subject_path,
         start_frame=start_frame,
         end_frame=end_frame
     )
-
-# Save the raw, non-averaged motion energy immediately (ensures on-disk copy exists before any classification)
-try:
-    os.makedirs(save_dir_videography, exist_ok=True)
-    if start_frame is None and end_frame is None:
-        pure_name = 'motion_energy_pure.npy'
-    else:
-        s = 0 if start_frame is None else start_frame
-        e = 'end' if end_frame is None else end_frame
-        pure_name = f'motion_energy_pure_subset_{s}_{e}.npy'
-    np.save(Path(save_dir_videography) / pure_name, motion_energy_orig)
-    print(f"Saved (ensured) {pure_name} to {save_dir_videography}")
-except Exception as e:
-    print(f"Warning: could not save raw motion energy: {e}")
 
 def _pad_to_multiple(data, multiple):
     data = np.asarray(data)
@@ -344,7 +314,9 @@ def _pad_to_multiple(data, multiple):
     pad_len = multiple - remainder
     return np.pad(data, (0, pad_len), mode='edge')
 
-# (Removed ad-hoc pure save block; compute_motion_energy already saves *_pure.npy)
+# Preview original ME
+plt.plot(motion_energy_orig)
+plt.show()
 
 # # Load SLEAP output (if computed)
 
@@ -390,21 +362,7 @@ def average_frames(data, avg_block=None):
 
 # Ensure length is divisible by avg_block before averaging
 motion_energy_ready = _pad_to_multiple(motion_energy_orig, avg_block)
-motion_energy = average_frames(motion_energy_ready, avg_block=avg_block)
-
-# Save averaged motion energy ("non-pure") for reuse
-try:
-    os.makedirs(save_dir_videography, exist_ok=True)
-    if start_frame is None and end_frame is None:
-        avg_name = 'motion_energy_avg.npy'
-    else:
-        s = 0 if start_frame is None else start_frame
-        e = 'end' if end_frame is None else end_frame
-        avg_name = f'motion_energy_avg_subset_{s}_{e}.npy'
-    np.save(Path(save_dir_videography) / avg_name, motion_energy)
-    print(f"Saved {avg_name} to {save_dir_videography}")
-except Exception as e:
-    print(f"Warning: could not save averaged motion energy: {e}")
+motion_energy = average_frames(motion_energy_ready, avg_block = 5)
 
 length_acts = len(motion_energy)
 # for plotting xticks to seconds
@@ -444,20 +402,6 @@ print(f"Adaptive window length: {adaptive_window_length}")
 # smooth 
 smoothed_motion_energy = savgol_filter(motion_energy, window_length=adaptive_window_length,
                                        polyorder=polyorder, mode='interp')
-
-# Save smoothed motion energy as well
-try:
-    os.makedirs(save_dir_videography, exist_ok=True)
-    if start_frame is None and end_frame is None:
-        smooth_name = 'smoothed_motion_energy.npy'
-    else:
-        s = 0 if start_frame is None else start_frame
-        e = 'end' if end_frame is None else end_frame
-        smooth_name = f'smoothed_motion_energy_subset_{s}_{e}.npy'
-    np.save(Path(save_dir_videography) / smooth_name, smoothed_motion_energy)
-    print(f"Saved {smooth_name} to {save_dir_videography}")
-except Exception as e:
-    print(f"Warning: could not save smoothed motion energy: {e}")
 # plot 
 plt.figure(figsize=(30, 5), dpi=300)
 plt.plot(motion_energy, label='raw motion energy', linewidth=2)
@@ -879,7 +823,7 @@ def plot_detected_twitches(
 
     Parameters:
     - motion_energy: Raw motion energy signal.
-    - smoothed_motion_energy: Smoothed motion energy signal.
+    - smoothed motion energy: Smoothed motion energy signal.
     - threshold_twitches: Threshold for twitch detection.
     - threshold_motion_energy: Threshold for binary motion energy.
     - inds_twitches: Indices where twitch segments start (onsets).
@@ -906,430 +850,3 @@ def plot_detected_twitches(
     # Plot raw motion energy and binary motion energy (including twitch detection)
     axs[1].plot(motion_energy, color='blue', linewidth=1, label='mot_en')
     axs[1].plot(trio_motion_energy, color='darkorange', linewidth=1, label='3 states on mot_en')
-    axs[1].axhline(y=threshold_twitches, color='red', linestyle='--', label='twitch threshold')
-    axs[1].set_xticks(ticks=frame_ticks)
-    axs[1].set_xticklabels(second_ticks, fontsize=12)
-    axs[1].set_xlabel('Time (s)', fontsize=15)
-    # axs[1].set_title('Twitch detection', fontsize=18)
-
-    # Adjust layout and save the plot
-    plt.subplots_adjust(hspace=0.6)
-
-    if save_dir is not None:
-        out_path = save_dir / 'trio_motion_energy_including_twitches.png'
-        plt.savefig(out_path, bbox_inches='tight', pad_inches=0.1)
-        print(f"Plot saved to: {out_path}")
-
-    plt.show()
-    plt.close(fig)
-
-plot_detected_twitches(
-    motion_energy=motion_energy,
-    smoothed_motion_energy=smoothed_motion_energy,
-    bin_motion_energy=bin_motion_energy,
-    threshold_twitches=twitch_threshold,
-    threshold_motion_energy= binary_threshold,
-    inds_twitches=twitch_onsets,
-    frame_ticks=frame_ticks,
-    second_ticks=second_ticks,
-    save_dir=save_dir_videography
-)
-
-n_twitches = len(twitch_onsets) 
-n_active_motions = len(active_motion_segments)
-
-# ========== SUMMARY ==========
-print(f"Total active/awake motions detected: {n_active_motions}")
-print(f"Total twitches detected: {n_twitches}")
-
-# # Final annotated motion 
-
-def get_behavior_classification(bin_putative_twitch, bin_twitch, bin_motion_energy, active_onsets, twitch_onsets):
-    """
-    Classify behavior states and key motion onsets.
-
-    Parameters:
-        bin_putative_twitch (np.ndarray): raw unfiltered twitch binary array
-        bin_twitch (np.ndarray): filtered twitch binary array
-        bin_motion_energy (np.ndarray): binarized motion energy (1 = active, 0 = rest)
-
-    Returns:
-        dict: classified behavior array and key motion index groups
-    """
-    classified_behavior = bin_motion_energy.copy()
-    classified_behavior[twitch_onsets] = -1
-    classified_behavior[active_onsets] = 1
-
-    # 2. Complex motion onsets (filtered twitches)
-    complex_motion = (bin_putative_twitch == 1) & (bin_twitch == 0) # not-twitches 
-
-    complex_onsets = np.where((complex_motion[1:]== 1) & (complex_motion[:-1]== 0))[0] +1
-    complex_offsets = np.where((complex_motion[1:] ==0) & (complex_motion[:-1] ==1))[0] +1
-
-    complex_motion_segments = []
-    for onset,offset in zip(complex_onsets, complex_offsets):
-        complex_motion_segments.append((onset,offset))
-        classified_behavior[onset:offset] =2 
-
-    # Index groups
-    active_and_complex_motions = np.where((classified_behavior == 1) | (classified_behavior == 2))[0]
-    only_active_motions = np.where(classified_behavior == 1)[0]
-    twitch_onsets = np.where(classified_behavior == -1)[0]
-
-    return classified_behavior, active_and_complex_motions, only_active_motions, complex_motion_segments ,complex_onsets, complex_offsets
-
-classified_behavior, active_and_complex_motions, only_active_motions, complex_motion_segments, complex_onsets, complex_offsets  = get_behavior_classification(bin_putative_twitch, bin_twitch, bin_motion_energy, active_onsets, twitch_onsets)
-
-import matplotlib.patches as mpatches 
-
-def plot_classified_behavior_timeline(classified_behavior, motion_signal, framerate=3, title='Classified behavior', save_dir=None):
-    """
-    Plots the classified behavior as a color-coded horizontal bar with motion signal and segment durations.
-
-    Parameters:
-        classified_behavior (np.ndarray): array of -1, 0, 1, 2 values (behavior states)
-        motion_signal (np.ndarray): array of raw or smoothed motion energy signal
-        framerate (int): sampling frequency (for time axis), default is 3 Hz
-        title (str): plot title
-    """
-    # Create a colormap for behavior classification
-    color_map = {
-        -1: 'red',  # Twitch onset - red
-         0: 'grey',  # Rest - gray
-         1: 'blue',  # Active - blue
-         2: 'cyan'   # Complex motion - orange
-    }
-
-    # Time axis (in seconds)
-    time = np.arange(len(classified_behavior)) / framerate
-
-    # Normalize the motion signal
-    motion_signal_norm = (motion_signal - np.min(motion_signal)) / (np.max(motion_signal) - np.min(motion_signal))
-
-    # Create a figure for the plot
-    fig, ax = plt.subplots(figsize=(20, 4), dpi=150)
-
-    # Draw segments as continuous spans to avoid per-frame bars
-    start_idx = 0
-    for i in range(1, len(classified_behavior)):
-        if classified_behavior[i] != classified_behavior[start_idx]:
-            seg_state = classified_behavior[start_idx]
-            seg_start = time[start_idx]
-            seg_end = time[i]
-            alpha_value = 0.5
-            if seg_state == -1:
-                alpha_value = max(0.95, alpha_value)
-            elif seg_state == 1:
-                alpha_value = max(0.3, alpha_value)
-            elif seg_state == 2:
-                alpha_value = max(0.5, alpha_value)
-            ax.axvspan(seg_start, seg_end, ymin=0.0, ymax=1.0, facecolor=color_map[seg_state], edgecolor=None, alpha=alpha_value)
-            start_idx = i
-
-    # Draw last segment
-    if start_idx < len(classified_behavior):
-        seg_state = classified_behavior[start_idx]
-        seg_start = time[start_idx]
-        seg_end = time[-1]
-        alpha_value = 0.5
-        if seg_state == -1:
-            alpha_value = max(0.95, alpha_value)
-        elif seg_state == 1:
-            alpha_value = max(0.3, alpha_value)
-        elif seg_state == 2:
-            alpha_value = max(0.5, alpha_value)
-        ax.axvspan(seg_start, seg_end, ymin=0.0, ymax=1.0, facecolor=color_map[seg_state], edgecolor=None, alpha=alpha_value)
-
-    # Downsample motion signal for plotting if very long
-    max_points = 20000
-    if len(time) > max_points:
-        step = int(np.ceil(len(time) / max_points))
-        time_ds = time[::step]
-        motion_ds = motion_signal_norm[::step]
-    else:
-        time_ds = time
-        motion_ds = motion_signal_norm
-
-    # Plot motion signal on top (rasterized to save memory)
-    ax.plot(time_ds, motion_ds, color='cyan', linewidth=0.8, rasterized=True)
-
-    # Add labels and title
-    ax.set_xlabel('Time (s)', fontsize=18)
-    ax.set_ylabel('motion_energy', fontsize=18)
-    ax.set_yticks([])
-    ax.set_title(title, fontsize=24)
-
-    # Legend
-    legend_patches = [
-        mpatches.Patch(color=color_map[-1], label='Twitch (-1)'),
-        mpatches.Patch(color=color_map[0], label='Rest (0)'),
-        mpatches.Patch(color=color_map[1], label='Active (1)'),
-        mpatches.Patch(color=color_map[2], label='Complex (2)'),
-    ]
-    ax.legend(handles=legend_patches, loc='upper right', fontsize=12)
-
-    # Save and close
-    if save_dir is not None:
-        out_path = save_dir / 'classified_behavior.png'
-        fig.savefig(out_path, bbox_inches='tight', pad_inches=0.1)
-    plt.show()
-    plt.close(fig)
-
-plot_classified_behavior_timeline(classified_behavior, motion_energy, framerate=framerate, save_dir=save_dir_videography)
-
-print(classified_behavior[100:1500])
-
-# # Save all outputs 
-
-classified_behavior, active_and_complex_motions, only_active_motions, complex_motion_segments, complex_onsets, complex_offsets
-auto_detection = {
-    'frequency' : framerate,
-    # 'binary_threshold' : 'otsu',
-    # 'twitch_threshold' : 'li',
-    '+- active_motion_min_distance' : twitch_min_distance_from_active/framerate , #sec
-    'motion_energy_downsampled_2x' : motion_energy,
-    'binary_motion_energy' : bin_motion_energy,
-
-    'classified_behavior': classified_behavior, # np.array: classified behavior (pre-curation): 0,1,-1,2 aka Rest, Active, Twitch, Complex
-    
-    'active_motion_onsets' : active_motion_onsets,
-    'active_motion_offsets' : active_motion_offsets,
-    'active_motion_segments' : active_motion_segments,
-
-    'active_and_complex_motions':active_and_complex_motions,
-    'only_active_motions':only_active_motions,
-
-    'complex_onsets': complex_onsets,
-    'complex_offsets': complex_offsets,
-    'complex_motion_segments' : complex_motion_segments, #just (onset,offset)
-
-    'binary_twich':bin_twitch, #binary array where 1 == twitch 
-    'inds_twitches_segments': inds_twitches_segments,
-    'n_twitches' : n_twitches, # no. of twitches 
-    'twitch_onsets': twitch_onsets,  # onsets 
-    'twitch_offsets': twitch_offsets  # offsets     
-}
-
-np.save(save_dir + f'auto_detection.npy', auto_detection)
-# np.savez(save_dir + f"auto_detection_{ds}.npz", **auto_detection) 
-
-# save automatic_annotations
-
-automatic_annotations = {
-    'active_onsets': active_motion_onsets,
-    'active_offsets': active_motion_offsets,
-    'twitch_onsets': twitch_onsets, 
-    'twitch_offsets': twitch_offsets,
-    'complex_onsets': complex_onsets, 
-    'complex_offsets' : complex_offsets,
-    'validated_active_onsets': [],
-    'validated_active_offsets': [],
-    'validated_twitch_onsets': [], 
-    'validated_twitch_offsets': [],
-    'validated_complex_onsets': [], 
-    'validated_complex_offsets' : []
-}
-
-# Save as Excel
-df = pd.DataFrame(dict([(k, pd.Series(v)) for k, v in automatic_annotations.items()]))
-df.to_excel(save_dir_videography/'automatic_annotations.xlsx', index=False)
-
-# # Match detected frame indices on the avg back to original time 
-
-rescaled_annotations = {}
-for key, value in automatic_annotations.items():
-    if len(value) > 0:
-        rescaled_annotations[key] = [int(v * scaling_factor) for v in value] # matches avg frame to original frame idx 
-    else:
-        rescaled_annotations[key] = []
-
-# Convert to DataFrame
-df_rescaled = pd.DataFrame({k: pd.Series(v) for k, v in rescaled_annotations.items()})
-
-# Save to Excel
-df_rescaled.to_excel(save_dir_videography / 'automatic_annotations_rescaled.xlsx', index=False)
-
-# ===== Export analysis summary for GUI =====
-try:
-    summary = {
-        "mode": "external_me" if external_me_path is not None else "compute_from_tiff",
-        "paths": {
-            "subject_path": str(subject_path),
-            "output_dir": str(save_dir_videography),
-            "external_me_path": str(external_me_path) if external_me_path else None,
-        },
-        "range": {
-            "start": int(start_frame) if start_frame is not None else 0,
-            "end": int(end_frame) if end_frame is not None else n_frames if 'n_frames' in locals() else None,
-            "exclusive": True
-        },
-        "snr": float(snr) if 'snr' in locals() else None,
-        "smoothing": {
-            "adaptive_window_length": int(adaptive_window_length) if 'adaptive_window_length' in locals() else None,
-            "polyorder": int(polyorder) if 'polyorder' in locals() else None,
-        },
-        "bimodality": {
-            "is_bimodal": bool(bimodality) if 'bimodality' in locals() else None,
-            "num_kde_peaks": int(num_peaks) if 'num_peaks' in locals() else None,
-            "dip_stat": float(dip_stat) if 'dip_stat' in locals() else None,
-            "dip_p_value": float(dip_p_value) if 'dip_p_value' in locals() else None,
-        },
-        "thresholds": {
-            "binary": {
-                "method": binary_method,
-                "value": float(binary_threshold) if 'binary_threshold' in locals() else None,
-                "candidates": {
-                    "mean_sd": float(threshold_motion_mean_sd) if 'threshold_motion_mean_sd' in locals() else None,
-                    "li": float(threshold_motion_li) if 'threshold_motion_li' in locals() else None,
-                    "otsu": float(threshold_motion_otsu) if 'threshold_motion_otsu' in locals() else None,
-                }
-            },
-            "twitch": {
-                "method": twitch_method,
-                "value": float(twitch_threshold) if 'twitch_threshold' in locals() else None,
-                "candidates": {
-                    "mean_3sd": float(twitch_threshold_motion_mean_sd) if 'twitch_threshold_motion_mean_sd' in locals() else None,
-                    "li": float(twitch_threshold_motion_li) if 'twitch_threshold_motion_li' in locals() else None,
-                    "otsu": float(twitch_threshold_motion_otsu) if 'twitch_threshold_motion_otsu' in locals() else None,
-                    "mad": float(threshold_mad) if 'threshold_mad' in locals() else None,
-                    "percentile_95": float(threshold_95) if 'threshold_95' in locals() else None,
-                }
-            }
-        },
-        "counts": {
-            "n_active_motions": int(n_active_motions) if 'n_active_motions' in locals() else None,
-            "n_twitches": int(n_twitches) if 'n_twitches' in locals() else None,
-        },
-        "params": {
-            "framerate": int(framerate),
-            "twitch_min_distance_from_active": int(twitch_min_distance_from_active),
-            "active_motion_duration_min": int(active_motion_duration_min),
-            "long_active_motion_duration_min": int(long_active_motion_duration_min),
-        }
-    }
-    with open(save_dir_videography / 'analysis_summary.json', 'w', encoding='utf-8') as f:
-        json.dump(summary, f, indent=2)
-    print(f"Saved analysis summary to {save_dir_videography / 'analysis_summary.json'}")
-except Exception as e:
-    print(f"Warning: failed to write analysis_summary.json: {e}")
-
-## Adjusting script's output (to increase readability and facilitate input to GUI)
-
-# # If GUI: (input)
-
-# Prepare motion energy and total frames
-n_frames = len(motion_energy_orig)
-frame_idx = np.arange(n_frames)
-
-# Initialize binary arrays (0 = not in state, 1 = in state)
-active = np.zeros(n_frames, dtype=int)
-twitch = np.zeros(n_frames, dtype=int)
-complex_ = np.zeros(n_frames, dtype=int)
-
-# Function to fill ranges between onset and offset
-def fill_intervals(onsets, offsets, target_array):
-    for on, off in zip(onsets, offsets):
-        if 0 <= on < off <= n_frames:
-            target_array[on:off] = 1
-        elif 0 <= on < n_frames:
-            target_array[on:] = 1  # In case offset is missing or out of bounds
-
-# Fill activity intervals
-fill_intervals(rescaled_annotations.get("active_onsets", []), rescaled_annotations.get("active_offsets", []), active)
-fill_intervals(rescaled_annotations.get("twitch_onsets", []), rescaled_annotations.get("twitch_offsets", []), twitch)
-fill_intervals(rescaled_annotations.get("complex_onsets", []), rescaled_annotations.get("complex_offsets", []), complex_)
-
-# Create final framewise DataFrame
-df_framewise = pd.DataFrame({
-    "frame_idx": frame_idx,
-    "motion_energy": motion_energy_orig,
-    "active": active,
-    "twitch": twitch,
-    "complex": complex_
-})
-
-# Save as CSV for GUI loading
-df_framewise.to_csv(save_dir_videography / f'mousecraft_auto_labels.csv', index=False)
-
-# # Write on video for validation (manual curation)
-
-# tiff = io.imread(movie_path, plugin='tifffile') #pil loads on snapshot 
-
-# # making sure smallest value of tiff is zero - just a linear transform, shouldn't affect NMF ? 
-# tiff -= np.min(tiff)
-# print(f'Shape of video: {tiff.shape}')
-
-# # LossLess compression (output tiff or avi)
-
-# # Normalize if needed
-# tiff = tiff - np.min(tiff)
-# tiff = (tiff / tiff.max() * 255).astype(np.uint8)
-
-# # Convert grayscale to BGR if needed
-# if len(tiff.shape) == 3:  # (frames, height, width)
-#     tiff = np.stack([tiff] * 3, axis=-1)
-
-# # Set up AVI writer
-# height, width = tiff.shape[1:3] 
-# out = cv2.VideoWriter(
-#     'output_video.avi',
-#     cv2.VideoWriter_fourcc(*'FFV1'),  # Lossless codec (e.g., FFV1, MJPG, or XVID for near-lossless)
-#     15,  # FPS
-#     (width, height)
-# )
-
-# # Write frames
-# for frame in tiff:
-#     out.write(frame)
-# out.release()
-# print("Saved to output_video.avi")
-
-# # Define onset points (from onset_twitch_1d)
-# for onset_time in twitch_onsets:
-#     # Ensure onset_time is within the frame count
-#     if onset_time < len(tiff):
-#         frame = tiff[onset_time]
-#         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-        
-#         # write 'Twitch') at a fixed location (x, y)
-#         cv2.putText(frame_bgr, 'Twitch onset', (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 1, cv2.LINE_AA)
-
-#         tiff[onset_time] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-
-#         # tiff[onset_time] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-
-#         print("Finished marking onset frames.")
-
-# for active_mot_onset in active_motion_onsets: 
-#     if active_mot_onset < len(tiff):
-#         frame= tiff[active_mot_onset]
-#         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-#         cv2.putText(frame_bgr, 'Active motion onset', (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 1, cv2.LINE_AA)
-#         tiff[active_mot_onset] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY) 
-
-# for active_motion_offset in active_motion_offsets:
-#     if active_motion_offset < len(tiff):
-#         frame = tiff[active_motion_offset]
-#         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-#         cv2.putText(frame_bgr, 'Active motion offset', (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 1, cv2.LINE_AA)
-#         tiff[active_motion_offset] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)   
-
-# for complex_motion_onset in complex_onsets:
-#     if complex_motion_onset < len(tiff):
-#         frame=tiff[complex_motion_onset]
-#         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-#         cv2.putText(frame_bgr, 'Complex motion', (50,100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 1, cv2.LINE_AA)
-#         tiff[complex_motion_onset] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    
-# output_dir = save_dir_videography / '_validation_twitch_video.tif'
-# # Export the marked frames as TIFF sequence
-# os.makedirs(output_dir, exist_ok=True)
-
-# # Save frames as TIFF files
-# for i, frame in enumerate(tiff):
-#     output_path = os.path.join(output_dir, f"frame_{i:04d}.tiff")
-#     img = Image.fromarray(frame)
-#     img.save(output_path)
-    
-# print(f"Exported {len(tiff)} frames to {output_dir}")
-
