@@ -447,14 +447,6 @@ class MotionAnnotator(QWidget):
         super().__init__()
         self.setWindowTitle("MouseCraft")
         self.setGeometry(100, 100, 1400, 900)
-        # Prevent unintended shrinking/minimizing on Windows when rows show/hide
-        try:
-            self.setMinimumSize(1100, 750)
-        except Exception:
-            pass
-        # When true, navigation (next/prev onset, validations) will not auto-recenter the timeline
-        # unless the target is outside the current viewport. Toggled on by Reset Zoom.
-        self.lock_timeline_zoom = False
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
         self.start_mouse_timer()
@@ -633,8 +625,7 @@ class MotionAnnotator(QWidget):
         left_panel = QVBoxLayout()
 
         # Add vertical spacer between logo and controls
-        # Avoid expanding spacer that can push controls off-screen after relayouts
-        left_panel.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Minimum, QSizePolicy.Minimum))
+        left_panel.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         # Video folder label (above video)
         self.video_folder_label = QLabel("")
@@ -676,8 +667,6 @@ class MotionAnnotator(QWidget):
 
         # Video controls
         video_controls = QGroupBox("Video Controls")
-        # Keep controls at a stable height; let video/timeline take vertical expansion
-        video_controls.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         video_layout = QGridLayout()
         self.load_video_btn = QPushButton("Load Video")
         self.load_video_btn.clicked.connect(self.load_video)
@@ -1026,6 +1015,8 @@ class MotionAnnotator(QWidget):
         self.finish_edit_btn.clicked.connect(self.finish_edit_onset)
         edit_form.addWidget(self.finish_edit_btn)
         self.edit_widget.setLayout(edit_form)
+        # Limit edit widget height to reduce layout shifts
+        self.edit_widget.setMaximumHeight(40)
         self.edit_widget.hide()
         onset_layout.addWidget(self.edit_widget)
         # Remove this line - split_widget no longer exists
@@ -1036,10 +1027,6 @@ class MotionAnnotator(QWidget):
         self.onset_layout = onset_layout
         self.onset_group = onset_group
         onset_group.setLayout(onset_layout)
-        try:
-            onset_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
-        except Exception:
-            pass
         # Groupe Save & Export
         save_group = QGroupBox("Save & Export")
         save_layout = QHBoxLayout()
@@ -1361,10 +1348,14 @@ class MotionAnnotator(QWidget):
                         if hasattr(self, 'browse_btn'):
                             self.browse_btn.setEnabled(use_video)
                         self.fps_edit.setEnabled(use_video)
-                        # Averaging: allowed for both sources
-                        self.avg_edit.setEnabled(True)
-                        if self.avg_edit.text().strip() == "":
-                            self.avg_edit.setPlaceholderText("enter a positive integer, e.g. 5 (use 1 for no averaging)")
+                        # Averaging: required for video, disabled for precomputed ME
+                        if use_video:
+                            self.avg_edit.setEnabled(True)
+                            if self.avg_edit.text().strip() == "":
+                                self.avg_edit.setPlaceholderText("enter a positive integer, e.g. 5 (use 1 for no averaging)")
+                        else:
+                            self.avg_edit.setEnabled(False)
+                            self.avg_edit.setPlaceholderText("Averaging disabled for precomputed ME; smoothing still applies")
 
                     self._update_sources_enabled = _update_sources_enabled
 
@@ -1394,8 +1385,8 @@ class MotionAnnotator(QWidget):
                         ok = len(self.video_path_edit.text().strip()) > 0 and os.path.exists(self.video_path_edit.text().strip())
                     else:
                         ok = self.radio_me.isEnabled()  # enabled only if ME is available
-                    # Require averaging for both sources
-                    if ok:
+                    # Require averaging only when computing from video
+                    if ok and want_video:
                         avg_txt = self.avg_edit.text().strip()
                         ok = avg_txt.isdigit() and int(avg_txt) >= 1
                     # If computing only a part, validate range
@@ -1445,15 +1436,20 @@ class MotionAnnotator(QWidget):
             fps_txt = dlg.fps_edit.text().strip()
             if fps_txt.isdigit():
                 args.extend(['--fps', fps_txt])
-            # Averaging handling (for both sources)
-            try:
-                avg_txt = dlg.avg_edit.text().strip()
-            except Exception:
-                avg_txt = ''
-            if not (avg_txt.isdigit() and int(avg_txt) >= 1):
-                QMessageBox.critical(self, "Missing averaging value", "Veuillez saisir un facteur de moyenne (entier >= 1).\nEnter an averaging factor in the dialog (use 1 for no averaging).")
-                return
-            args.extend(['--avg', avg_txt])
+            # Averaging handling
+            if dlg.radio_me.isChecked():
+                # For precomputed Motion Energy, force no averaging and rely on smoothing in the script
+                args.extend(['--avg', '1'])
+            else:
+                # Validate and add average factor (MANDATORY for video)
+                try:
+                    avg_txt = dlg.avg_edit.text().strip()
+                except Exception:
+                    avg_txt = ''
+                if not (avg_txt.isdigit() and int(avg_txt) >= 1):
+                    QMessageBox.critical(self, "Missing averaging value", "Veuillez saisir un facteur de moyenne (entier >= 1).\nEnter an averaging factor in the dialog (use 1 for no averaging).")
+                    return
+                args.extend(['--avg', avg_txt])
             # Add optional start/end range
             if dlg.radio_part.isChecked():
                 try:
@@ -2170,8 +2166,16 @@ class MotionAnnotator(QWidget):
                 self.change_type_dropdown.addItems(self.available_event_types)
             if hasattr(self, 'timeline_canvas'):
                 self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+                if getattr(self.timeline_canvas, 'visible_event_types', None) is not None:
+                    for t in self.available_event_types:
+                        if t not in self.timeline_canvas.visible_event_types:
+                            self.timeline_canvas.visible_event_types.append(t)
             if hasattr(self, 'timeline_canvas2'):
                 self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+                if getattr(self.timeline_canvas2, 'visible_event_types', None) is not None:
+                    for t in self.available_event_types:
+                        if t not in self.timeline_canvas2.visible_event_types:
+                            self.timeline_canvas2.visible_event_types.append(t)
             # Update timeline
             self.timeline_canvas.plot_motion_energy_preserve_view(self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None))
             if self.onsets:
@@ -2225,8 +2229,12 @@ class MotionAnnotator(QWidget):
                 # Propagate colors and visibility to canvases
                 if hasattr(self, 'timeline_canvas'):
                     self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+                    if getattr(self.timeline_canvas, 'visible_event_types', None) is not None and etype not in self.timeline_canvas.visible_event_types:
+                        self.timeline_canvas.visible_event_types.append(etype)
                 if hasattr(self, 'timeline_canvas2'):
                     self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
+                    if getattr(self.timeline_canvas2, 'visible_event_types', None) is not None and etype not in self.timeline_canvas2.visible_event_types:
+                        self.timeline_canvas2.visible_event_types.append(etype)
 
             for onset, _ in events:
                 self.onsets.append(onset)
@@ -2434,24 +2442,13 @@ class MotionAnnotator(QWidget):
 
         # Check for overlap with existing events in the selected target only (ignore rejected)
         overlapping = []
-        # Determine if complex should be considered absent in overlaps (all three types present)
-        try:
-            types_present = {str(t).lower() for t in target_types.values()}
-            hide_complex_in_overlap = {'twitch', 'active', 'complex'}.issubset(types_present)
-        except Exception:
-            hide_complex_in_overlap = False
         for other_onset in target_onsets:
             validations = self.timeline_canvas2.onset_validations if target_secondary else self.timeline_canvas.onset_validations
             if validations.get(other_onset, 'pending') == 'rejected':
                 continue
             other_offset = target_offsets.get(other_onset, other_onset)
             if (onset <= other_offset and offset_inclusive >= other_onset) and not (onset < other_onset and offset_inclusive > other_offset):
-                other_type = str(target_types.get(other_onset, 'unknown')).lower()
-                if hide_complex_in_overlap and other_type == 'complex':
-                    # Treat complex as absent when all three types exist
-                    pass
-                else:
-                    overlapping.append((other_onset, other_offset, target_types.get(other_onset, 'unknown')))
+                overlapping.append((other_onset, other_offset, target_types.get(other_onset, 'unknown')))
         if overlapping:
             msg = "This event overlaps with existing events:\n\n"
             for o, off, typ in overlapping:
@@ -2821,12 +2818,7 @@ class MotionAnnotator(QWidget):
         status_text = self.status_filter_combo.currentText().lower()
         # Filter by type
         if type_text == "all":
-            # By default, when twitch, active, and complex all exist, hide complex from navigation
-            types_present = {str(self.onset_types.get(o, '')).lower() for o in self.onsets}
-            if {'twitch', 'active', 'complex'}.issubset(types_present):
-                filtered = [o for o in self.onsets if str(self.onset_types.get(o, '')).lower() != 'complex']
-            else:
-                filtered = self.onsets.copy()
+            filtered = self.onsets.copy()
         else:
             filtered = [o for o in self.onsets if self.onset_types.get(o, '').lower() == type_text]
         # Filter by status
@@ -2883,47 +2875,40 @@ class MotionAnnotator(QWidget):
             self.show_frame(onset_frame)
             timeline.current_frame = onset_frame
             timeline.update_timeline()
-            # Re-center view keeping same zoom width, unless zoom lock is active and onset is within current view
+            # Re-center view keeping same zoom width
             try:
                 if view_width is not None and view_width > 0:
-                    # Check if target onset is within current xlim when lock is enabled
-                    recenter_needed = True
-                    if current_xlim is not None and self.lock_timeline_zoom:
-                        left_vis, right_vis = current_xlim
-                        if left_vis <= onset_frame <= right_vis:
-                            recenter_needed = False
-                    if recenter_needed:
-                        half = view_width / 2.0
-                        # Determine total frames for clamping
-                        if getattr(self, "active_timeline_index", 1) == 1:
-                            total = getattr(self, 'total_frames', None)
-                            if total is None or total <= 0:
-                                total = len(self.motion_energy) if getattr(self, 'motion_energy', None) is not None else onset_frame + 1
-                        else:
-                            # Secondary timeline total length fallback
-                            total = len(getattr(self.timeline_canvas2, 'motion_energy', [])) if hasattr(self, 'timeline_canvas2') else onset_frame + 1
-                        left = max(0, onset_frame - half)
-                        right = left + view_width
-                        if total and right > total:
-                            right = total
-                            left = max(0, right - view_width)
-                        timeline.ax.set_xlim(left, right)
-                        # Keep secondary timeline aligned if visible
-                        if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
-                            try:
-                                self.timeline_canvas2.ax.set_xlim(left, right)
-                                try:
-                                    self.timeline_canvas2.adjust_ylim_to_view()
-                                except Exception:
-                                    pass
-                                self.timeline_canvas2.draw()
-                            except Exception:
-                                pass
-                    # Adapt Y to the content in view regardless
+                    half = view_width / 2.0
+                    # Determine total frames for clamping
+                    if getattr(self, "active_timeline_index", 1) == 1:
+                        total = getattr(self, 'total_frames', None)
+                        if total is None or total <= 0:
+                            total = len(self.motion_energy) if getattr(self, 'motion_energy', None) is not None else onset_frame + 1
+                    else:
+                        # Secondary timeline total length fallback
+                        total = len(getattr(self.timeline_canvas2, 'motion_energy', [])) if hasattr(self, 'timeline_canvas2') else onset_frame + 1
+                    left = max(0, onset_frame - half)
+                    right = left + view_width
+                    if total and right > total:
+                        right = total
+                        left = max(0, right - view_width)
+                    timeline.ax.set_xlim(left, right)
+                    # Adapt Y to the content in view
                     try:
                         timeline.adjust_ylim_to_view()
                     except Exception:
                         pass
+                    # Keep secondary timeline aligned if visible
+                    if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible():
+                        try:
+                            self.timeline_canvas2.ax.set_xlim(left, right)
+                            try:
+                                self.timeline_canvas2.adjust_ylim_to_view()
+                            except Exception:
+                                pass
+                            self.timeline_canvas2.draw()
+                        except Exception:
+                            pass
                 timeline.draw()
             except Exception:
                 pass
@@ -2970,10 +2955,6 @@ class MotionAnnotator(QWidget):
         self.offset_validation_widget.setLayout(layout)
         self.offset_validation_widget.hide()
 
-    def refresh_onset_layout(self):
-        """No-op: avoid forcing any geometry recalculation to prevent window minimizing on Windows."""
-        return
-
     def confirm_and_accept_offset(self):
         self.unsaved_changes = True
         new_offset_exclusive = self.offset_edit_spinbox.value()
@@ -3003,10 +2984,6 @@ class MotionAnnotator(QWidget):
 
         # Hide widget and re-enable buttons
         self.offset_validation_widget.hide()
-        try:
-            self.refresh_onset_layout()
-        except Exception:
-            pass
         self.accept_btn.setEnabled(True)
         self.edit_btn.setEnabled(True)
         self.reject_btn.setEnabled(True)
@@ -3039,20 +3016,8 @@ class MotionAnnotator(QWidget):
             self.edit_btn.setEnabled(True)
             self.reject_btn.setEnabled(True)
             self.change_type_btn.setEnabled(True)
-            try:
-                self.refresh_onset_layout()
-            except Exception:
-                pass
             self.setFocus()
             return
-
-        # If edit row is currently shown, hide it first
-        if hasattr(self, 'edit_widget') and self.edit_widget.isVisible():
-            try:
-                self.edit_widget.hide()
-                self.refresh_onset_layout()
-            except Exception:
-                pass
 
         if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
             current_onset = self.filtered_onsets[self.current_onset_idx]
@@ -3067,10 +3032,6 @@ class MotionAnnotator(QWidget):
 
         # Show the validation widget and disable other buttons
         self.offset_validation_widget.show()
-        try:
-            self.refresh_onset_layout()
-        except Exception:
-            pass
         self.accept_btn.setEnabled(True) # Keep accept enabled to act as a cancel button
         self.edit_btn.setEnabled(False)
         self.reject_btn.setEnabled(False)
@@ -3200,23 +3161,11 @@ class MotionAnnotator(QWidget):
     def start_edit_onset(self):
         # Prevent editing if offset validation is in progress
         if self.offset_validation_widget.isVisible():
-            try:
-                self.offset_validation_widget.hide()
-                self.refresh_onset_layout()
-            except Exception:
-                pass
-            try:
-                self.showNormal()
-            except Exception:
-                pass
+            return
 
         # Si le widget d'édition est déjà visible, le fermer
         if self.edit_widget.isVisible():
             self.edit_widget.hide()
-            try:
-                self.refresh_onset_layout()
-            except Exception:
-                pass
             self.accept_btn.setEnabled(True)
             self.edit_btn.setEnabled(True)
             self.reject_btn.setEnabled(True)
@@ -3230,12 +3179,6 @@ class MotionAnnotator(QWidget):
             current_onset = self.filtered_onsets[self.current_onset_idx]
         else:
             current_onset = self.onsets[self.current_onset_idx]
-        # Ensure the edit row is the only one visible
-        try:
-            self.offset_validation_widget.hide()
-            self.refresh_onset_layout()
-        except Exception:
-            pass
         # Record the original anchor for robust overlap exclusion during this edit session
         try:
             self._currently_editing_anchor = self.original_onsets.get(current_onset, current_onset)
@@ -3245,10 +3188,6 @@ class MotionAnnotator(QWidget):
         self.edit_onset_spinbox.setValue(current_onset)
         self.edit_offset_spinbox.setValue(offset + 1)  # Show exclusive offset
         self.edit_widget.show()
-        try:
-            self.refresh_onset_layout()
-        except Exception:
-            pass
         self.accept_btn.setEnabled(False)
         self.edit_btn.setEnabled(True)
         self.reject_btn.setEnabled(False)
@@ -3298,10 +3237,6 @@ class MotionAnnotator(QWidget):
                     self.undo_stack.append((old_onset, prev_status))
                 self.timeline_canvas.onset_validations[old_onset] = 'accepted'
                 self.edit_widget.hide()
-                try:
-                    self.refresh_onset_layout()
-                except Exception:
-                    pass
                 self.accept_btn.setEnabled(True)
                 self.edit_btn.setEnabled(True)
                 self.reject_btn.setEnabled(True)
@@ -3833,14 +3768,7 @@ Average Score: {avg_score:.3f}
         self.timeline_canvas.plot_motion_energy_preserve_view(
             self.motion_energy, self.onsets, self.onset_types, self.timeline_canvas.event_offsets, getattr(self, 'event_status', None)
         )
-        # Initialize filtered_onsets now so navigation excludes complex if needed
-        try:
-            self.update_onset_filter()
-        except Exception:
-            pass
-        if hasattr(self, 'filtered_onsets') and self.filtered_onsets:
-            self.goto_onset(0)
-        elif self.onsets:
+        if self.onsets:
             self.goto_onset(0)
         self.undo_btn.setEnabled(True)
         # Reset mouse milestone state
@@ -3909,8 +3837,6 @@ Average Score: {avg_score:.3f}
     def zoom_in_timeline(self):
         # Zoom in on the x-axis by a factor of 2, centered on current frame
         # Use shared extent across both inputs so both can zoom consistently
-        # Any manual zoom clears the lock
-        self.lock_timeline_zoom = False
         ax1 = self.timeline_canvas.ax
         xlim = ax1.get_xlim()
         center = self.current_frame
@@ -3932,8 +3858,6 @@ Average Score: {avg_score:.3f}
     def zoom_out_timeline(self):
         # Zoom out on the x-axis by a factor of 2, centered on current frame
         # Use shared extent across both inputs so both can zoom consistently
-        # Any manual zoom clears the lock
-        self.lock_timeline_zoom = False
         ax1 = self.timeline_canvas.ax
         xlim = ax1.get_xlim()
         center = self.current_frame
@@ -3958,8 +3882,6 @@ Average Score: {avg_score:.3f}
         total1 = getattr(self.timeline_canvas, 'total_frames', 0)
         total2 = getattr(self.timeline_canvas2, 'total_frames', 0) if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2.isVisible() else 0
         xmax = max(total1, total2, 1000)
-        # Engage zoom lock so subsequent navigation doesn't recenter unless off-screen
-        self.lock_timeline_zoom = True
 
         # Primary timeline
         ax1 = self.timeline_canvas.ax
@@ -4680,13 +4602,6 @@ Average Score: {avg_score:.3f}
         overlaps = []
         # Only consider events that are not rejected
         valid_onsets = [onset for onset in self.onsets if self.timeline_canvas.onset_validations.get(onset, 'pending') not in ('rejected',)]
-        # If twitch, active, and complex all exist, ignore complex completely for overlap checks
-        try:
-            types_present = {str(self.onset_types.get(o, '')).lower() for o in self.onsets}
-            if {'twitch', 'active', 'complex'}.issubset(types_present):
-                valid_onsets = [o for o in valid_onsets if str(self.onset_types.get(o, '')).lower() != 'complex']
-        except Exception:
-            pass
         events = [(onset, self.timeline_canvas.event_offsets.get(onset, onset)) for onset in valid_onsets]
         events = sorted(events, key=lambda x: x[0])
         for i in range(len(events)):
@@ -5033,12 +4948,6 @@ Average Score: {avg_score:.3f}
         elif not isinstance(exclude_onsets, (list, tuple, set)):
             exclude_onsets = [exclude_onsets]
         overlapped = []
-        # Determine if complex should be considered absent in overlap prompts (all three types present)
-        try:
-            all_types_present = {str(t).lower() for t in self.onset_types.values()}
-            hide_complex_in_overlap = {'twitch', 'active', 'complex'}.issubset(all_types_present)
-        except Exception:
-            hide_complex_in_overlap = False
         # Determine original anchor for the edited event if available
         edited_orig = None
         try:
@@ -5068,11 +4977,7 @@ Average Score: {avg_score:.3f}
                 pass
             # Check if other event is totally inside new event
             if new_onset < other_onset and new_offset > other_offset:
-                other_type = str(self.onset_types.get(other_onset, 'unknown')).lower()
-                if hide_complex_in_overlap and other_type == 'complex':
-                    pass
-                else:
-                    overlapped.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
+                overlapped.append((other_onset, other_offset, self.onset_types.get(other_onset, 'unknown')))
         for onset, offset, event_type in overlapped:
             reply = QMessageBox.question(
                 self,
@@ -5131,11 +5036,7 @@ Average Score: {avg_score:.3f}
             except Exception:
                 pass
             if new_onset < other_onset and new_offset > other_offset:
-                other_type = str(onset_types.get(other_onset, 'unknown')).lower()
-                if hide_complex_in_overlap and other_type == 'complex':
-                    pass
-                else:
-                    overlapped.append((other_onset, other_offset, onset_types.get(other_onset, 'unknown')))
+                overlapped.append((other_onset, other_offset, onset_types.get(other_onset, 'unknown')))
         for onset, offset, event_type in overlapped:
             reply = QMessageBox.question(
                 self,
@@ -5249,10 +5150,20 @@ Average Score: {avg_score:.3f}
             # Also propagate mapping and visibility to both timelines
             if hasattr(self, 'timeline_canvas') and self.timeline_canvas is not None:
                 self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
-                # Preserve current visibility selection; do not auto-append types
+                try:
+                    if hasattr(self.timeline_canvas, 'visible_event_types') and self.timeline_canvas.visible_event_types is not None:
+                        if key not in self.timeline_canvas.visible_event_types:
+                            self.timeline_canvas.visible_event_types.append(key)
+                except Exception:
+                    pass
             if hasattr(self, 'timeline_canvas2') and self.timeline_canvas2 is not None:
                 self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
-                # Preserve current visibility selection; do not auto-append types
+                try:
+                    if hasattr(self.timeline_canvas2, 'visible_event_types') and self.timeline_canvas2.visible_event_types is not None:
+                        if key not in self.timeline_canvas2.visible_event_types:
+                            self.timeline_canvas2.visible_event_types.append(key)
+                except Exception:
+                    pass
             dialog.accept()
             self.redraw()
 

@@ -212,6 +212,84 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
             height, width = first.shape
             print(f'Loaded TIFF (streaming) with {num_frames} frames, height={height}, width={width}')
 
+            # If pages report <2 but the TIFF is a multi-dimensional series (e.g., OME/ImageJ),
+            # use the series and axes metadata to iterate frames lazily.
+            if num_frames < 2:
+                if len(tif.series) > 0:
+                    series = tif.series[0]
+                    sshape = series.shape
+                    saxes = getattr(series, 'axes', '')
+                    # Determine frame axis
+                    if 'T' in saxes:
+                        t_axis = saxes.index('T')
+                    elif len(sshape) >= 3:
+                        t_axis = 0  # assume first axis is time if no axes label
+                    else:
+                        t_axis = None
+
+                    if t_axis is not None and sshape[t_axis] >= 2:
+
+                        # Determine iteration bounds in time axis coordinates
+                        total = sshape[t_axis]
+                        iter_start = 1 if not start_frame or start_frame < 1 else min(start_frame, total - 1)
+                        iter_end = (total - 1) if not end_frame else min(end_frame - 1, total - 1)
+                        if iter_end < iter_start:
+                            iter_end = iter_start
+
+                        def get_frame_from_array(stack_arr, idx):
+                            slicer = [slice(None)] * stack_arr.ndim
+                            slicer[t_axis] = idx
+                            frame = stack_arr[tuple(slicer)]
+                            if 'C' in saxes:
+                                c_axis = saxes.index('C')
+                                if c_axis < frame.ndim:
+                                    frame = frame.mean(axis=c_axis)
+                            if frame.ndim > 2:
+                                frame = np.squeeze(frame)
+                            return frame.astype(np.float32)
+
+                        me_values = []
+                        # Load full series array and iterate along time axis
+                        print('Reading TIFF series into memory to compute motion energy (series.asarray()).')
+                        stack_arr = series.asarray()
+                        img_prev = get_frame_from_array(stack_arr, iter_start - 1)
+                        for i in range(iter_start, iter_end + 1):
+                            img = get_frame_from_array(stack_arr, i)
+                            diff = img - img_prev
+                            me_values.append(float(np.sum(diff * diff)))
+                            img_prev = img
+                            if i % 1000 == 0:
+                                print(f'Done computing for {i}/{total} series-frames (array)')
+                        motion_energy = np.array(me_values, dtype=np.float64)
+                        # proceed to normalization/saving below
+                    else:
+                        # Truly single frame -> fallback consistent behavior
+                        print('TIFF series indicates <2 frames. Returning zero motion energy of length 1 to keep pipeline consistent.')
+                        motion_energy = np.zeros(1, dtype=np.float64)
+                        if save_path is not None:
+                            try:
+                                os.makedirs(save_path, exist_ok=True)
+                                out_name = 'motion_energy_pure.npy' if (start_frame is None and end_frame is None) else \
+                                           f"motion_energy_pure_subset_{0 if start_frame is None else start_frame}_{'end' if end_frame is None else end_frame}.npy"
+                                np.save(os.path.join(save_path, out_name), motion_energy)
+                                print(f"Saved {out_name} to {save_path}")
+                            except Exception as e:
+                                print(f"Warning: could not save motion energy: {e}")
+                        return motion_energy
+                else:
+                    print('No series found and only 1 page. Returning zero motion energy of length 1 to keep pipeline consistent.')
+                    motion_energy = np.zeros(1, dtype=np.float64)
+                    if save_path is not None:
+                        try:
+                            os.makedirs(save_path, exist_ok=True)
+                            out_name = 'motion_energy_pure.npy' if (start_frame is None and end_frame is None) else \
+                                       f"motion_energy_pure_subset_{0 if start_frame is None else start_frame}_{'end' if end_frame is None else end_frame}.npy"
+                            np.save(os.path.join(save_path, out_name), motion_energy)
+                            print(f"Saved {out_name} to {save_path}")
+                        except Exception as e:
+                            print(f"Warning: could not save motion energy: {e}")
+                    return motion_energy
+
             # Determine iteration bounds (compute diff for i in [iter_start, iter_end])
             iter_start = 1 if not start_frame or start_frame < 1 else min(start_frame, num_frames - 1)
             iter_end = (num_frames - 1) if not end_frame else min(end_frame - 1, num_frames - 1)
@@ -228,20 +306,23 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
                 if i % 1000 == 0:
                     print(f'Done computing for {i}/{num_frames} frames')
             motion_energy = np.array(me_values, dtype=np.float64)
-    elif ext == '.avi':
-        # Lazy import OpenCV only if we actually read an AVI
+    elif ext in ('.avi', '.mp4', '.mov', '.mkv', '.m4v', '.mpg', '.mpeg', '.wmv', '.webm', '.flv'):
+        # Use OpenCV for general video formats
         try:
             import cv2
         except Exception as e:
             raise ImportError(
-                "Failed to import OpenCV (cv2) required for AVI reading. "
-                "If you don't need AVI, provide a TIFF/NPY instead, or install opencv-python. "
+                "Failed to import OpenCV (cv2) required for video reading. "
+                "If you don't need video, provide a TIFF/NPY instead, or install opencv-python. "
                 "On Windows, you may also need to increase the paging file (virtual memory) if you see 'pagefile insufficient'."
             ) from e
         cap = cv2.VideoCapture(movie_path)
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open video: {movie_path}")
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total < 2:
+            cap.release()
+            raise ValueError('Video has fewer than 2 frames; need at least 2 frames to compute motion energy.')
         # Determine iteration bounds
         iter_start = 1 if not start_frame or start_frame < 1 else min(start_frame, total - 1)
         iter_end = (total - 1) if not end_frame else min(end_frame - 1, total - 1)
@@ -256,14 +337,20 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
         if not ret:
             cap.release()
             raise RuntimeError("Failed to read frame for initialization")
-        frame_prev = cv2.cvtColor(frame_prev, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        # Convert to grayscale if needed
+        if len(frame_prev.shape) == 3 and frame_prev.shape[2] > 1:
+            frame_prev = cv2.cvtColor(frame_prev, cv2.COLOR_BGR2GRAY)
+        frame_prev = frame_prev.astype(np.float32)
         me_values = []
         i = iter_start
         while i <= iter_end:
             ret, frame = cap.read()
             if not ret:
                 break
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            if len(frame.shape) == 3 and frame.shape[2] > 1:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            else:
+                gray = frame.astype(np.float32)
             diff = gray - frame_prev
             me_values.append(float(np.sum(diff * diff)))
             frame_prev = gray
@@ -272,7 +359,7 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
             i += 1
         cap.release()
         motion_energy = np.array(me_values, dtype=np.float64)
-        print(f'Loaded AVI with {len(motion_energy)} ME frames in selected range')
+        print(f'Loaded video with {len(motion_energy)} ME frames in selected range')
     else:
         raise ValueError(f"Unsupported video format: {ext}")
 
