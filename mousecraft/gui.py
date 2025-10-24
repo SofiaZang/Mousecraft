@@ -216,17 +216,17 @@ class DraggableTimeline(FigureCanvas):
             offset = self.event_offsets.get(onset, onset)
             status = self.event_status.get(onset, '')
             alpha = 1.0 if status == 'accepted' else 0.4
-            # Pick color from mapping with graceful fallback
+            # Pick color from mapping with graceful fallback; ignore 'complex'
             color_key = str(onset_type).lower()
+            if color_key == 'complex':
+                continue
             color_value = self.event_type_colors.get(color_key, self.event_type_colors.get(onset_type, None))
             if color_value is None:
-                # Default colors: twitch purple, active yellow, complex cyan
+                # Default colors: twitch purple, active yellow
                 if color_key == 'twitch':
                     color_value = 'purple'
                 elif color_key == 'active':
                     color_value = 'yellow'
-                elif color_key == 'complex':
-                    color_value = 'cyan'
                 else:
                     color_value = '#888888'
             self.ax.axvspan(onset, offset, color=color_value, alpha=alpha)
@@ -236,6 +236,9 @@ class DraggableTimeline(FigureCanvas):
             validation = self.onset_validations.get(onset, 'pending')
             # Skip pending events (no marker)
             if validation == 'pending':
+                continue
+            # Ignore complex events entirely
+            if str(self.onset_types.get(onset, '')).lower() == 'complex':
                 continue
             # Compute score for color logic
             score = 0
@@ -514,12 +517,11 @@ class MotionAnnotator(QWidget):
         self._mouse_milestones = set()
         self._mouse_milestones_shown = set()
 
-        # Dynamic event types and colors
-        self.available_event_types = ["twitch", "active", "complex"]
+        # Dynamic event types and colors (complex removed per spec)
+        self.available_event_types = ["twitch", "active"]
         self.event_type_colors = {
             "twitch": "purple",
             "active": "yellow",
-            "complex": "cyan",
         }
 
         # Palette de couleurs pour nouveaux types (cycle stable)
@@ -2066,6 +2068,8 @@ class MotionAnnotator(QWidget):
             created = 0
             for col in candidate_cols:
                 etype = str(col).lower().strip()
+                if etype == 'complex':
+                    continue
                 if etype not in self.available_event_types:
                     self.available_event_types.append(etype)
                 if etype not in self.event_type_colors:
@@ -2191,6 +2195,8 @@ class MotionAnnotator(QWidget):
         
         for event_type, events in self.curated_events.items():
             etype = str(event_type).lower().strip()
+            if etype == 'complex':
+                continue
             # Register unseen types: add to available list, assign color, and propagate to canvases
             if etype not in self.available_event_types:
                 self.available_event_types.append(etype)
@@ -2294,6 +2300,8 @@ class MotionAnnotator(QWidget):
                 onset_col = base + '_onset'
                 offset_col = base + '_offset'
                 etype = normalize(base)
+                if etype == 'complex':
+                    continue
                 discovered_types.append(etype)
 
                 # Register new types and assign colors
@@ -2408,7 +2416,7 @@ class MotionAnnotator(QWidget):
         offset_exclusive = self.offset_spinbox.value()
         event_type = self.event_type_combo.currentText()
         if event_type == "Select type…":
-            QMessageBox.warning(self, "Invalid Event Type", "Please select an event type (twitch, active, or complex) before adding the event.")
+            QMessageBox.warning(self, "Invalid Event Type", "Please select an event type (twitch or active) before adding the event.")
             return
         if onset >= offset_exclusive:
             QMessageBox.warning(self, "Invalid Event", 
@@ -2434,12 +2442,6 @@ class MotionAnnotator(QWidget):
 
         # Check for overlap with existing events in the selected target only (ignore rejected)
         overlapping = []
-        # Determine if complex should be considered absent in overlaps (all three types present)
-        try:
-            types_present = {str(t).lower() for t in target_types.values()}
-            hide_complex_in_overlap = {'twitch', 'active', 'complex'}.issubset(types_present)
-        except Exception:
-            hide_complex_in_overlap = False
         for other_onset in target_onsets:
             validations = self.timeline_canvas2.onset_validations if target_secondary else self.timeline_canvas.onset_validations
             if validations.get(other_onset, 'pending') == 'rejected':
@@ -2447,11 +2449,9 @@ class MotionAnnotator(QWidget):
             other_offset = target_offsets.get(other_onset, other_onset)
             if (onset <= other_offset and offset_inclusive >= other_onset) and not (onset < other_onset and offset_inclusive > other_offset):
                 other_type = str(target_types.get(other_onset, 'unknown')).lower()
-                if hide_complex_in_overlap and other_type == 'complex':
-                    # Treat complex as absent when all three types exist
-                    pass
-                else:
-                    overlapping.append((other_onset, other_offset, target_types.get(other_onset, 'unknown')))
+                if other_type == 'complex':
+                    continue
+                overlapping.append((other_onset, other_offset, target_types.get(other_onset, 'unknown')))
         if overlapping:
             msg = "This event overlaps with existing events:\n\n"
             for o, off, typ in overlapping:
@@ -2821,12 +2821,8 @@ class MotionAnnotator(QWidget):
         status_text = self.status_filter_combo.currentText().lower()
         # Filter by type
         if type_text == "all":
-            # By default, when twitch, active, and complex all exist, hide complex from navigation
-            types_present = {str(self.onset_types.get(o, '')).lower() for o in self.onsets}
-            if {'twitch', 'active', 'complex'}.issubset(types_present):
-                filtered = [o for o in self.onsets if str(self.onset_types.get(o, '')).lower() != 'complex']
-            else:
-                filtered = self.onsets.copy()
+            # Always ignore complex in navigation
+            filtered = [o for o in self.onsets if str(self.onset_types.get(o, '')).lower() != 'complex']
         else:
             filtered = [o for o in self.onsets if self.onset_types.get(o, '').lower() == type_text]
         # Filter by status
@@ -3723,6 +3719,8 @@ Average Score: {avg_score:.3f}
 
         for col in candidate_cols:
             etype = str(col).lower().strip()
+            if etype == 'complex':
+                continue
             # Register type and assign color if new
             if etype not in self.available_event_types:
                 self.available_event_types.append(etype)
@@ -3817,10 +3815,8 @@ Average Score: {avg_score:.3f}
             self.change_type_dropdown.clear()
             self.change_type_dropdown.addItems(self.available_event_types)
         # Propagate colors to canvases
-        # Decide default visibility: if both active and twitch exist, hide complex by default
-        default_visible = list(self.available_event_types)
-        if 'active' in default_visible and 'twitch' in default_visible and 'complex' in default_visible:
-            default_visible = [t for t in default_visible if t != 'complex']
+        # Visible types: ignore complex entirely
+        default_visible = [t for t in self.available_event_types if t != 'complex']
         if hasattr(self, 'timeline_canvas'):
             self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
             # Overwrite visible_event_types to prevent stale state from previous loads
@@ -4375,7 +4371,7 @@ Average Score: {avg_score:.3f}
         suffix = '_pending' if has_pending else '_final'
         mf_df = input_df.copy()
         n_frames = len(mf_df)
-        for col in ['active', 'twitch', 'complex']:
+        for col in ['active', 'twitch']:
             # if col not in mf_df.columns:
             mf_df[col] = 0
         mf_df['status'] = [''] * n_frames
@@ -4389,7 +4385,7 @@ Average Score: {avg_score:.3f}
             end = max(onset, self.timeline_canvas.event_offsets.get(onset, onset))
             # For export: make offset inclusive; ensure at least one-frame span
             export_offset = end + 1 if end > start else (start + 1)
-            if event_type in ['active', 'twitch', 'complex']:
+            if event_type in ['active', 'twitch']:
                 mf_df.loc[start:end, event_type] = 1
             # Write status and score only at the onset frame
             if manual_only_export:
@@ -4549,7 +4545,7 @@ Average Score: {avg_score:.3f}
             try:
                 import pandas as pd
                 mf2_df = pd.DataFrame({'frame_idx': list(range(n_frames2))})
-                for col in ['active', 'twitch', 'complex']:
+                for col in ['active', 'twitch']:
                     mf2_df[col] = 0
                 mf2_df['status'] = [''] * n_frames2
                 mf2_df['score'] = [''] * n_frames2
@@ -4995,7 +4991,12 @@ Average Score: {avg_score:.3f}
 
     def check_all_validated_and_show_firework(self):
         if not hasattr(self, '_firework_shown') or not self._firework_shown:
-            if all(self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending' for o in self.onsets):
+            # Consider only twitch/active; ignore 'complex' entirely
+            relevant_onsets = [o for o in self.onsets if str(self.onset_types.get(o, '')).lower() in ('twitch', 'active')]
+            if not relevant_onsets:
+                return
+            all_done = all(self.timeline_canvas.onset_validations.get(o, 'pending') != 'pending' for o in relevant_onsets)
+            if all_done:
                 self.show_firework_animation()
                 from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.information(self, "Congratulations!", "Congratulations! All events have been validated.")

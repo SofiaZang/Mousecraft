@@ -190,7 +190,7 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
     
     #check if motion energy has already been computed, if that's the case load it
 
-    motion_energy_path = os.path.join(save_path,"motion_energy_pure.npy")
+    motion_energy_path = os.path.join(save_path,"motion_energy_original.npy")
     if os.path.exists(motion_energy_path):
 
         print(f'Motion energy already computed. Loading from {motion_energy_path}')
@@ -269,8 +269,8 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
                         if save_path is not None:
                             try:
                                 os.makedirs(save_path, exist_ok=True)
-                                out_name = 'motion_energy_pure.npy' if (start_frame is None and end_frame is None) else \
-                                           f"motion_energy_pure_subset_{0 if start_frame is None else start_frame}_{'end' if end_frame is None else end_frame}.npy"
+                                out_name = 'motion_energy_original.npy' if (start_frame is None and end_frame is None) else \
+                                           f"motion_energy_original_subset_{0 if start_frame is None else start_frame}_{'end' if end_frame is None else end_frame}.npy"
                                 np.save(os.path.join(save_path, out_name), motion_energy)
                                 print(f"Saved {out_name} to {save_path}")
                             except Exception as e:
@@ -282,8 +282,8 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
                     if save_path is not None:
                         try:
                             os.makedirs(save_path, exist_ok=True)
-                            out_name = 'motion_energy_pure.npy' if (start_frame is None and end_frame is None) else \
-                                       f"motion_energy_pure_subset_{0 if start_frame is None else start_frame}_{'end' if end_frame is None else end_frame}.npy"
+                            out_name = 'motion_energy_original.npy' if (start_frame is None and end_frame is None) else \
+                                       f"motion_energy_orginal_subset_{0 if start_frame is None else start_frame}_{'end' if end_frame is None else end_frame}.npy"
                             np.save(os.path.join(save_path, out_name), motion_energy)
                             print(f"Saved {out_name} to {save_path}")
                         except Exception as e:
@@ -375,11 +375,11 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
             os.makedirs(save_path, exist_ok=True)
             # Avoid overwriting full ME if a subset was computed
             if start_frame is None and end_frame is None:
-                out_name = 'motion_energy_pure.npy'
+                out_name = 'motion_energy_original.npy'
             else:
                 s = 0 if start_frame is None else start_frame
                 e = 'end' if end_frame is None else end_frame
-                out_name = f'motion_energy_pure_subset_{s}_{e}.npy'
+                out_name = f'motion_energy_original_subset_{s}_{e}.npy'
             np.save(os.path.join(save_path, out_name), motion_energy)
             print(f"Saved {out_name} to {save_path}")
         except Exception as e:
@@ -413,13 +413,13 @@ else:
 try:
     os.makedirs(save_dir_videography, exist_ok=True)
     if start_frame is None and end_frame is None:
-        pure_name = 'motion_energy_pure.npy'
+        orig_name = 'motion_energy_original.npy'
     else:
         s = 0 if start_frame is None else start_frame
         e = 'end' if end_frame is None else end_frame
-        pure_name = f'motion_energy_pure_subset_{s}_{e}.npy'
-    np.save(Path(save_dir_videography) / pure_name, motion_energy_orig)
-    print(f"Saved (ensured) {pure_name} to {save_dir_videography}")
+        original_name = f'motion_energy_original_subset_{s}_{e}.npy'
+    np.save(Path(save_dir_videography) / original_name, motion_energy_orig)
+    print(f"Saved (ensured) {original_name} to {save_dir_videography}")
 except Exception as e:
     print(f"Warning: could not save raw motion energy: {e}")
 
@@ -431,7 +431,7 @@ def _pad_to_multiple(data, multiple):
     pad_len = multiple - remainder
     return np.pad(data, (0, pad_len), mode='edge')
 
-# (Removed ad-hoc pure save block; compute_motion_energy already saves *_pure.npy)
+# (Removed ad-hoc ORIGINAL SIGNAL save block; compute_motion_energy already saves *_original.npy)
 
 # # Load SLEAP output (if computed)
 
@@ -479,7 +479,7 @@ def average_frames(data, avg_block=None):
 motion_energy_ready = _pad_to_multiple(motion_energy_orig, avg_block)
 motion_energy = average_frames(motion_energy_ready, avg_block=avg_block)
 
-# Save averaged motion energy ("non-pure") for reuse
+# Save averaged motion energy ("non-ORIGINAL in common sense average????") for reuse
 try:
     os.makedirs(save_dir_videography, exist_ok=True)
     if start_frame is None and end_frame is None:
