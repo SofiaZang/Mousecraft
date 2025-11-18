@@ -480,6 +480,20 @@ class MotionAnnotator(QWidget):
         self.fps = 1  # Initialisation par défaut à 1 dans __init__
         self.current_frame = 0
         self.playback_speed = 1.0
+        self.contrast_alpha = 1.0
+        self.brightness_beta = 0
+        self.gamma = 1.0
+        self._gamma_lut = None
+        self.crop_enabled = False
+        self.crop_rect = None
+        
+        
+        
+        
+        
+        
+        
+        
         # TIFF handling
         self.is_tiff = False
         self.tiff_reader = None  # tifffile.TiffFile instance for primary
@@ -756,6 +770,14 @@ class MotionAnnotator(QWidget):
         # self.fps_lineedit.setStyleSheet("background: rgba(255,255,0, 0.5);") # Supprimé
         video_layout.addWidget(QLabel("FPS:"), 2, 0)
         video_layout.addWidget(self.fps_lineedit, 2, 1)
+
+        self.adjust_contrast_btn = QPushButton("Adjust Contrast…")
+        self.adjust_contrast_btn.clicked.connect(self.open_adjust_dialog_from_button)
+        video_layout.addWidget(self.adjust_contrast_btn, 3, 0, 1, 4)
+
+        self.crop_btn = QPushButton("Crop…")
+        self.crop_btn.clicked.connect(self.open_crop_dialog)
+        video_layout.addWidget(self.crop_btn, 4, 0, 1, 4)
 
         # Ajout du layout au groupbox
         video_controls.setLayout(video_layout)
@@ -1668,12 +1690,13 @@ class MotionAnnotator(QWidget):
                     # Fallback: single image
                     self.total_frames = 1
             else:
-                # Open with OpenCV video capture
                 self.cap = cv2.VideoCapture(self.video_path)
                 if not self.cap.isOpened():
                     QMessageBox.critical(self, "Error", "Could not open video file")
                     return
                 self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+            
             # self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))  # Ne pas écraser le FPS choisi
             # self.fps_lineedit.setText("")  # Ne pas vider le champ FPS
             self.frame_slider.setMaximum(self.total_frames - 1)
@@ -1698,6 +1721,256 @@ class MotionAnnotator(QWidget):
             # Enable compute button since a camera/video is now loaded
             if hasattr(self, 'compute_motion_energy_btn'):
                 self.compute_motion_energy_btn.setEnabled(True)
+
+    def _open_adjust_dialog(self, sample_rgb):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Adjust Image")
+        v = QVBoxLayout(dlg)
+        preview = QLabel()
+        preview.setAlignment(Qt.AlignCenter)
+        v.addWidget(preview)
+        g1 = QHBoxLayout()
+        g1.addWidget(QLabel("Contrast"))
+        s_contrast = QSlider(Qt.Horizontal)
+        s_contrast.setMinimum(50)
+        s_contrast.setMaximum(300)
+        s_contrast.setValue(int(self.contrast_alpha * 100))
+        g1.addWidget(s_contrast)
+        l_contrast = QLabel(f"{self.contrast_alpha:.2f}x")
+        g1.addWidget(l_contrast)
+        v.addLayout(g1)
+        g2 = QHBoxLayout()
+        g2.addWidget(QLabel("Brightness"))
+        s_brightness = QSlider(Qt.Horizontal)
+        s_brightness.setMinimum(-100)
+        s_brightness.setMaximum(100)
+        s_brightness.setValue(int(self.brightness_beta))
+        g2.addWidget(s_brightness)
+        l_brightness = QLabel(str(int(self.brightness_beta)))
+        g2.addWidget(l_brightness)
+        v.addLayout(g2)
+        g3 = QHBoxLayout()
+        g3.addWidget(QLabel("Gamma"))
+        s_gamma = QSlider(Qt.Horizontal)
+        s_gamma.setMinimum(20)
+        s_gamma.setMaximum(300)
+        s_gamma.setValue(int(self.gamma * 100))
+        g3.addWidget(s_gamma)
+        l_gamma = QLabel(f"{self.gamma:.2f}")
+        g3.addWidget(l_gamma)
+        v.addLayout(g3)
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        cancel_btn = QPushButton("Cancel")
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        v.addLayout(btns)
+
+        def mk_lut(g):
+            g = 0.2 if g < 0.2 else (3.0 if g > 3.0 else g)
+            inv = 1.0 / g
+            arr = (np.arange(256, dtype=np.float32) / 255.0) ** inv
+            return np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+
+        def update_preview():
+            a = max(0.01, float(s_contrast.value()) / 100.0)
+            b = int(s_brightness.value())
+            g = max(0.2, min(3.0, float(s_gamma.value()) / 100.0))
+            img = cv2.convertScaleAbs(sample_rgb, alpha=a, beta=b)
+            lut = mk_lut(g)
+            img = cv2.LUT(img, lut)
+            qimg = QImage(img.tobytes(), img.shape[1], img.shape[0], img.shape[1]*img.shape[2], QImage.Format_RGB888)
+            pm = QPixmap.fromImage(qimg)
+            preview.setPixmap(pm.scaledToWidth(600, Qt.SmoothTransformation))
+            l_contrast.setText(f"{a:.2f}x")
+            l_brightness.setText(str(b))
+            l_gamma.setText(f"{g:.2f}")
+
+        s_contrast.valueChanged.connect(update_preview)
+        s_brightness.valueChanged.connect(update_preview)
+        s_gamma.valueChanged.connect(update_preview)
+        update_preview()
+
+        def on_ok():
+            self.contrast_alpha = max(0.01, float(s_contrast.value()) / 100.0)
+            self.brightness_beta = int(s_brightness.value())
+            self.gamma = max(0.2, min(3.0, float(s_gamma.value()) / 100.0))
+            self._update_gamma_lut()
+            dlg.accept()
+
+        ok_btn.clicked.connect(on_ok)
+        cancel_btn.clicked.connect(dlg.reject)
+        return dlg.exec_() == QDialog.Accepted
+
+    def open_adjust_dialog_from_button(self):
+        sample_rgb = None
+        try:
+            if self.is_tiff and self.tiff_reader is not None:
+                idx = max(0, min(self.current_frame, len(self.tiff_reader.pages) - 1))
+                try:
+                    page = self.tiff_reader.pages[int(idx)]
+                    arr = page.asarray()
+                    if arr.ndim == 2:
+                        arr8 = arr.astype(np.uint8) if arr.dtype == np.uint8 else cv2.convertScaleAbs(arr)
+                        sample_rgb = cv2.cvtColor(arr8, cv2.COLOR_GRAY2RGB)
+                    elif arr.ndim == 3 and arr.shape[2] == 3:
+                        sample_rgb = arr
+                    elif arr.ndim == 3 and arr.shape[2] == 4:
+                        sample_rgb = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)
+                    else:
+                        sample_rgb = np.repeat(arr[..., None], 3, axis=2) if arr.ndim == 2 else arr[..., :3]
+                except Exception:
+                    sample_rgb = None
+            else:
+                if self.cap is not None:
+                    try:
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(self.current_frame)))
+                        ret, fr = self.cap.read()
+                        if ret:
+                            sample_rgb = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
+                    except Exception:
+                        sample_rgb = None
+        except Exception:
+            sample_rgb = None
+
+        if sample_rgb is not None:
+            if self._open_adjust_dialog(sample_rgb):
+                try:
+                    self.show_frame(self.current_frame)
+                except Exception:
+                    pass
+        else:
+            QMessageBox.warning(self, "No frame available", "Unable to fetch a frame preview for adjustment.")
+
+    def open_crop_dialog(self):
+        sample_rgb = None
+        try:
+            if self.is_tiff and self.tiff_reader is not None:
+                idx = max(0, min(self.current_frame, len(self.tiff_reader.pages) - 1))
+                try:
+                    page = self.tiff_reader.pages[int(idx)]
+                    arr = page.asarray()
+                    if arr.ndim == 2:
+                        arr8 = arr.astype(np.uint8) if arr.dtype == np.uint8 else cv2.convertScaleAbs(arr)
+                        sample_rgb = cv2.cvtColor(arr8, cv2.COLOR_GRAY2RGB)
+                    elif arr.ndim == 3 and arr.shape[2] == 3:
+                        sample_rgb = arr
+                    elif arr.ndim == 3 and arr.shape[2] == 4:
+                        sample_rgb = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)
+                    else:
+                        sample_rgb = np.repeat(arr[..., None], 3, axis=2) if arr.ndim == 2 else arr[..., :3]
+                except Exception:
+                    sample_rgb = None
+            else:
+                if self.cap is not None:
+                    try:
+                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(self.current_frame)))
+                        ret, fr = self.cap.read()
+                        if ret:
+                            sample_rgb = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
+                    except Exception:
+                        sample_rgb = None
+        except Exception:
+            sample_rgb = None
+
+        if sample_rgb is None:
+            QMessageBox.warning(self, "No frame available", "Unable to fetch a frame preview for cropping.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Crop Region")
+        v = QVBoxLayout(dlg)
+        preview = QLabel()
+        preview.setAlignment(Qt.AlignCenter)
+        v.addWidget(preview)
+
+        h, w = sample_rgb.shape[0], sample_rgb.shape[1]
+        x0 = 0 if not self.crop_rect else int(self.crop_rect[0])
+        y0 = 0 if not self.crop_rect else int(self.crop_rect[1])
+        ww = w if not self.crop_rect else int(self.crop_rect[2])
+        hh = h if not self.crop_rect else int(self.crop_rect[3])
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("X"))
+        sx = QSpinBox()
+        sx.setRange(0, max(0, w - 1))
+        sx.setValue(min(max(0, x0), max(0, w - 1)))
+        row1.addWidget(sx)
+        row1.addWidget(QLabel("Y"))
+        sy = QSpinBox()
+        sy.setRange(0, max(0, h - 1))
+        sy.setValue(min(max(0, y0), max(0, h - 1)))
+        row1.addWidget(sy)
+        v.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Width"))
+        sw = QSpinBox()
+        sw.setRange(1, w)
+        sw.setValue(min(max(1, ww), w))
+        row2.addWidget(sw)
+        row2.addWidget(QLabel("Height"))
+        sh = QSpinBox()
+        sh.setRange(1, h)
+        sh.setValue(min(max(1, hh), h))
+        row2.addWidget(sh)
+        v.addLayout(row2)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        clear_btn = QPushButton("Clear Crop")
+        cancel_btn = QPushButton("Cancel")
+        btns.addWidget(ok_btn)
+        btns.addWidget(clear_btn)
+        btns.addWidget(cancel_btn)
+        v.addLayout(btns)
+
+        def sanitize():
+            x = int(sx.value())
+            y = int(sy.value())
+            wv = int(sw.value())
+            hv = int(sh.value())
+            if x + wv > w:
+                wv = max(1, w - x)
+                sw.setValue(wv)
+            if y + hv > h:
+                hv = max(1, h - y)
+                sh.setValue(hv)
+            return x, y, wv, hv
+
+        def update_preview():
+            x, y, wv, hv = sanitize()
+            crop = sample_rgb[y:y+hv, x:x+wv]
+            qimg = QImage(crop.tobytes(), crop.shape[1], crop.shape[0], crop.shape[1]*crop.shape[2], QImage.Format_RGB888)
+            pm = QPixmap.fromImage(qimg)
+            preview.setPixmap(pm.scaledToWidth(600, Qt.SmoothTransformation))
+
+        sx.valueChanged.connect(update_preview)
+        sy.valueChanged.connect(update_preview)
+        sw.valueChanged.connect(update_preview)
+        sh.valueChanged.connect(update_preview)
+        update_preview()
+
+        def on_ok():
+            x, y, wv, hv = sanitize()
+            self.crop_enabled = True
+            self.crop_rect = (x, y, wv, hv)
+            dlg.accept()
+
+        def on_clear():
+            self.crop_enabled = False
+            self.crop_rect = None
+            dlg.accept()
+
+        ok_btn.clicked.connect(on_ok)
+        clear_btn.clicked.connect(on_clear)
+        cancel_btn.clicked.connect(dlg.reject)
+
+        if dlg.exec_() == QDialog.Accepted:
+            try:
+                self.show_frame(self.current_frame)
+            except Exception:
+                pass
 
     def add_camera(self):
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Second Video', '', 'Videos (*.avi *.mp4 *.mov *.mkv *.tiff *.tif)')
@@ -2596,12 +2869,57 @@ class MotionAnnotator(QWidget):
         text = self.fps_lineedit.text()
         if text.isdigit() and int(text) >= 1:
             self.fps = int(text)
-            # Update timer interval if playing
-            if hasattr(self, 'timer') and self.timer.isActive():
-                interval = int(1000 / self.fps)
-                self.timer.start(interval)
-        # If invalid, do not update self.fps
-        # No special handling needed for loop mode; it uses the same timer
+
+    def handle_contrast_change(self, value):
+        try:
+            self.contrast_alpha = max(0.01, float(value) / 100.0)
+            self.contrast_value_label.setText(f"{self.contrast_alpha:.2f}x")
+            self.show_frame(self.current_frame)
+        except Exception:
+            pass
+
+    def handle_brightness_change(self, value):
+        try:
+            self.brightness_beta = int(value)
+            self.brightness_value_label.setText(str(int(self.brightness_beta)))
+            self.show_frame(self.current_frame)
+        except Exception:
+            pass
+
+    def handle_gamma_change(self, value):
+        try:
+            self.gamma = max(0.2, min(3.0, float(value) / 100.0))
+            self.gamma_value_label.setText(f"{self.gamma:.2f}")
+            self._update_gamma_lut()
+            self.show_frame(self.current_frame)
+        except Exception:
+            pass
+
+    def _update_gamma_lut(self):
+        try:
+            g = float(self.gamma)
+            g = 0.2 if g < 0.2 else (3.0 if g > 3.0 else g)
+            inv = 1.0 / g
+            lut = (np.arange(256, dtype=np.float32) / 255.0) ** inv
+            lut = np.clip(lut * 255.0, 0, 255).astype(np.uint8)
+            self._gamma_lut = lut
+        except Exception:
+            self._gamma_lut = None
+
+    def _apply_image_adjustments(self, img):
+        try:
+            if img is None:
+                return img
+            out = cv2.convertScaleAbs(img, alpha=self.contrast_alpha, beta=self.brightness_beta)
+            if abs(float(self.gamma) - 1.0) > 1e-3:
+                if self._gamma_lut is None:
+                    self._update_gamma_lut()
+                if self._gamma_lut is not None:
+                    out = cv2.LUT(out, self._gamma_lut)
+            return out
+        except Exception:
+            return img
+
 
     def start_loop_playback(self):
         # Only start if current frame is exactly an onset
@@ -2656,6 +2974,18 @@ class MotionAnnotator(QWidget):
         
         # Optimize video processing and apply zoom by cropping, not resizing the panel
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = self._apply_image_adjustments(frame)
+        try:
+            if self.crop_enabled and isinstance(self.crop_rect, tuple):
+                x, y, w_roi, h_roi = self.crop_rect
+                h0, w0 = frame.shape[:2]
+                x = max(0, min(int(x), w0 - 1))
+                y = max(0, min(int(y), h0 - 1))
+                w_roi = max(1, min(int(w_roi), w0 - x))
+                h_roi = max(1, min(int(h_roi), h0 - y))
+                frame = frame[y:y+h_roi, x:x+w_roi]
+        except Exception:
+            pass
         h, w, ch = frame.shape
         label_size = self.video_label.size()
         if label_size.width() > 0 and label_size.height() > 0:
@@ -2715,6 +3045,18 @@ class MotionAnnotator(QWidget):
                         if ret2:
                             frame2 = cv2.cvtColor(cvframe2, cv2.COLOR_BGR2RGB)
                 if frame2 is not None:
+                    try:
+                        frame2 = self._apply_image_adjustments(frame2)
+                    except Exception:
+                        pass
+                    if self.crop_enabled and isinstance(self.crop_rect, tuple):
+                        x, y, w_roi, h_roi = self.crop_rect
+                        h0, w0 = frame2.shape[:2]
+                        x = max(0, min(int(x), w0 - 1))
+                        y = max(0, min(int(y), h0 - 1))
+                        w_roi = max(1, min(int(w_roi), w0 - x))
+                        h_roi = max(1, min(int(h_roi), h0 - y))
+                        frame2 = frame2[y:y+h_roi, x:x+w_roi]
                     h2, w2, ch2 = frame2.shape
                     label2_size = self.second_video_label.size()
                     if label2_size.width() > 0 and label2_size.height() > 0:
@@ -4362,12 +4704,12 @@ Average Score: {avg_score:.3f}
             import pandas as pd
             n_frames = len(self.motion_energy) if self.motion_energy is not None else (max(self.onsets)+1 if self.onsets else 0)
             input_df = pd.DataFrame({'frame_idx': list(range(n_frames))})
-            has_pending = False
             manual_only_export = True
         else:
             input_df = self.input_classification_df.copy()
-            has_pending = any(self.timeline_canvas.onset_validations.get(onset, 'pending') == 'pending' for onset in self.onsets)
             manual_only_export = False
+        validations = getattr(self.timeline_canvas, 'onset_validations', {}) if hasattr(self, 'timeline_canvas') else {}
+        has_pending = any(validations.get(onset, 'pending') == 'pending' for onset in self.onsets)
         suffix = '_pending' if has_pending else '_final'
         mf_df = input_df.copy()
         n_frames = len(mf_df)
@@ -4488,8 +4830,8 @@ Average Score: {avg_score:.3f}
             created_files.append(plot_path)
         except Exception:
             pass
-        # Add final classification plot only if no pending events
-        if not has_pending and not manual_only_export:
+        # Add final outputs and clean pending artifacts only if no pending events
+        if not has_pending:
             # Remove all _pending files in output_dir
             for fname in os.listdir(output_dir):
                 if '_pending' in fname:

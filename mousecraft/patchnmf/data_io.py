@@ -113,42 +113,106 @@ def hide_index(styler):
     })
     return styler
 
-def read_params(pixelnmf_params, ds):
+# read and load all parameters for all data from data_params.xlsx 
 
-    # Load Excel file containing parameters
-    df_params = pd.read_excel(pixelnmf_params)
-    
-    # define dataset 
+def read_params(cell_nmf_params, ds):
+    """
+    Reads imaging and session metadata parameters from Excel for a given dataset.
+
+    Parameters
+    ----------
+    cell_nmf_params : str
+        Path to Excel file containing parameters for multiple datasets.
+    ds : str
+        Dataset name (e.g., 'sz85_2024-04-25_b' or 'jm042/2024-08-27_a').
+
+    Returns
+    -------
+    params_table : pd.DataFrame
+        Table of session parameters.
+    age, day_imgd, FOV, framerate, duration, resolution, n_cells, n_components, time_per_frame
+    """
+
+    # --- Load Excel file ---
+    df_params = pd.read_excel(cell_nmf_params)
     pd.options.display.float_format = '{:.3f}'.format
-    
-    params = df_params[df_params['ds'] == ds].iloc[0]
-    
-    # Assign parameters to variables
-    blur_std = params['blur_std']
-    downs_fact = params['downs_fact']
-    res_orig = params['res_orig']
-    x_axis = params['x_axis']
-    y_axis = params['y_axis']
-    original_FOV = params['original_FOV']
-    framerate = params['framerate'] # (Hz)
-    duration = params['duration'] #(s)
-    n_components_elbow = params['n_components_elbow'] #cv_nmf output
-    n_components_min = params['n_components_min'] #cv_nmf output
 
-    # Calculate dependent parameters
-    resolution = original_FOV / x_axis
-    time_per_frame = 1 / framerate
-        
-    # Print table of parameters
+    # --- Normalize dataset name ---
+    df_params = df_params.dropna(how='all')
+
+    # Optionally, drop rows where 'ds' is NaN
+    df_params = df_params.dropna(subset=['ds']).reset_index(drop=True)
+
+    ds_norm = ds.replace('/', '_')  # replace / with _
+    ds_variants = [ds, ds.replace('-', '_'), ds.replace('_', '-'), ds_norm]
+
+    # --- Find matching dataset in Excel ---
+    match = df_params[df_params['ds'].isin(ds_variants)]
+    if match.empty:
+        raise ValueError(
+            f"Dataset '{ds}' not found in {cell_nmf_params}. "
+            f"Available datasets: {df_params['ds'].unique()}"
+        )
+
+    params = match.iloc[0]
+
+    # --- Extract parameters ---
+    genotype = params.get('genotype')
+    days_imaged = params.get('days_imaged')
+    tracked = params.get('tracked')
+    blur_std = params.get('blur_std')
+    downs_fact = params.get('downs_fact', None)
+    x_axis = params.get('x_axis')
+    y_axis = params.get('y_axis')
+    original_FOV = params.get('original_FOV')
+    framerate = params.get('framerate')
+    duration = params.get('duration')
+    resolution = params.get('resolution')
+    n_components_elbow = params.get('n_components_elbow')
+    n_components_min = params.get('n_components_min')
+    age = params.get('age')
+    weight_g = params.get('weight_g')
+    s2p = params.get('s2p')
+    cells = params.get('cells', None)
+    Behaviour = params.get('Behaviour', None)
+    mousecraft = params.get('mousecraft', None)
+    SLEAP = params.get('SLEAP', None)
+    
+    # --- Compute dependent value ---
+    if 'time_per_frame' in params and not pd.isna(params['time_per_frame']):
+        time_per_frame = params['time_per_frame']
+    elif framerate:
+        time_per_frame = 1 / framerate
+    else:
+        time_per_frame = None
+
+    # --- Build clean DataFrame for display ---
     params_table = pd.DataFrame({
-        'Parameter': ['blur_std', 'downs_fact', 'res_orig', 'x_axis', 'y_axis', 'original_FOV', 'framerate', 'duration', 'n_components_elbow', 'n_components_min', 'resolution', 'time_per_frame'],
-        'Value': [blur_std, downs_fact, res_orig, x_axis, y_axis, original_FOV, framerate, duration, n_components_elbow, n_components_min, resolution, time_per_frame]
+        'Parameter': [
+            'genotype', 'days_imaged', 'tracked', 'blur_std', 'downs_fact',
+            'x_axis', 'y_axis', 'original_FOV', 'framerate', 'duration',
+            'resolution', 'n_components_elbow', 'n_components_min', 'age',
+            'weight_g', 's2p', 'cells', 'Behaviour', 'mousecraft', 'SLEAP'            
+        ],
+        'Value': [
+            genotype, days_imaged, tracked, blur_std, downs_fact,
+            x_axis, y_axis, original_FOV, framerate, duration,
+            resolution, n_components_elbow, n_components_min, age,
+            weight_g, s2p, cells, Behaviour, mousecraft, SLEAP
+        ]
     })
-    
-    styled_params_table = params_table.style.pipe(style_table).set_properties(**{'text-align': 'center'})
 
-    # Display the styled table
-    display(styled_params_table)
+    # --- Display table nicely ---
+    if 'style_table' in globals():
+        styled_params_table = params_table.style.pipe(style_table).set_properties(**{'text-align': 'center'})
+        display(styled_params_table)
+    else:
+        display(params_table)
 
-    return params_table, blur_std, downs_fact, res_orig, x_axis, y_axis, original_FOV, framerate, duration, n_components_elbow, n_components_min, resolution, time_per_frame
-  
+    # --- Return both table and individual params ---
+    return (
+        params_table, genotype, days_imaged, tracked, blur_std, downs_fact,
+        x_axis, y_axis, original_FOV, framerate, duration, resolution,
+        n_components_elbow, n_components_min, age, weight_g, s2p, cells,
+        Behaviour, mousecraft, SLEAP
+    )
