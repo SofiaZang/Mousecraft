@@ -34,4 +34,5 @@ dependencies:
       - scikit-image
       - seaborn
       - statsmodels
+      - diptest
     
