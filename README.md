@@ -110,6 +110,7 @@ The notebook will look for the following configuration:
     - 'motion_energy.npy'
 
 If you did not compute motion_energy yet, you can do so within the notebook by setting the 'movie_path' variable to your behavioral video (.tiff). 
+
 -dataset_id
   - camera_processed
   - mouse_video.tif 
