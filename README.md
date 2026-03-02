@@ -163,7 +163,8 @@ Text box displaying annotation statistics. Accepted = 1, Rejected = -1, Edited =
 
 Field + Button (...): Choose where to save annotations and GUI outputs.
 
-Mousecraft auto-saves your progress every 20 min if you have performed at least one action within these 20 min. First autosave asks you for the output path and then its set for the following saves. If you close mousecraft before having finished the validation, you will not lose current progress as it is saved with prefix '_pending'. Once you complete and no pending events remain, the output files will overwrite any pending ones and be saved with prefix '_final'.
+Mousecraft auto-saves your progress every 20 min if you have performed at least one action within these 20 min. First autosave asks you for the output path and then its set for the following saves. If you close mousecraft before having finished the validation, you will not lose current progress as it is saved with prefix '_pending'. To continue from where you left off when you relaunch the GUI just load the validation_MF_pending file (see below in Outputs section).
+Once you complete and no pending events remain, the output files will overwrite any pending ones and be saved with prefix '_final'.
 
 ### Motion Energy Timeline (Right Panel)
 
