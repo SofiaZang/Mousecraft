@@ -107,7 +107,7 @@ Last, load your behavioral video recording in .avi or .mp4. Now you can inspect 
 
 **Annotate in the notebook and load in the GUI for validation-only:
 
-Else, you can independently run the 'motion_classifier.ipynb' notebook and load the 'gui_labels.xlsx' file that the notebook saves under the folder'mouse_motion_average'. This file will loads and displays both motion signal and proposed annotations so you don't need to 'Compute classification' in the GUI.
+Else, you can independently run the 'motion_classifier.ipynb' notebook and load the 'mousecraft_auto_labels.xlsx' file that the notebook saves under the folder'mouse_motion_average'. This file will loads and displays both motion signal and proposed annotations so you don't need to 'Compute classification' in the GUI.
 
 The notebook will look for the following configuration:
 
@@ -180,7 +180,7 @@ Displays the motion trace over time.
 
 #### Load An Input
 
-Loads a precomputed motion energy file (.csv, .xlsx, .npy) or a classification ('gui_labels.xlsx') for review and editing.
+Loads a precomputed motion energy file (.csv, .xlsx, .npy) or a classification ('mousecraft_auto_labels.xlsx') for review and editing.
 Annotated events appear as colored spans: Yellow: Active events, Purple: Twitch events, Green/Red/Orange dots: Validation status (Accepted, Rejected, Edited).
 
 #### Add A Second Input
@@ -259,11 +259,12 @@ Same information but each line is a frame (in same format as input .csv) and thi
 
 #### Other outputs:
 
+<img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
+
 and also 2 .pngs and .json that showcase the overall performance of mousecraft validation
 
 <img width="1359" height="1011" alt="validation_status_pie_final" src="https://github.com/user-attachments/assets/c936c207-6bcf-4b6c-a2ae-f25b42b73d14" />
 <img width="4472" height="1676" alt="validation_comparison_plot_final" src="https://github.com/user-attachments/assets/6ead7ed5-d7c9-4074-a92d-6bbec33706d5" />
-<img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
 
 ## License
 
