@@ -95,7 +95,13 @@ dependencies:
 
 **Annotate and Validate in the GUI:
 
-Mousecraft accepts any '.npy"' file of the motion signal you have computed for example 'motion_energy.npy' or 'eye_motion.npy'. Once you load your signal you can click on 'Compute classification" button to launch the annotation.
+Mousecraft accepts any '.npy"' file of the motion signal you have computed for example 'motion_energy.npy' or 'eye_motion.npy' or the behavioral video you want to annotate. Once you load your signal you can click on 'Compute classification" button to launch the annotation.
+
+See here: 
+
+<img width="722" height="580" alt="image" src="https://github.com/user-attachments/assets/ea4eb917-f058-4307-89ee-abae05492681" />
+
+You can choose to adjust the thresholds according to your usecase. Generally the annotation will first binarise the signal into 0-1 or Rest-Arousal states (recommended threshold: Otsu) and in a second step detect smaller events embedded within the 0 or Rest period (twitches or complex other movements) that can be interpreted according to your usecase. For example, if your signal is eye motion then the small fast transient changes in motion could be sleep-related fast eey movements. This will work best for clean signals where arousal interchanges with low-motion.
 
 Last, load your behavioral video recording in .avi or .mp4. Now you can inspect video and annotations in synch and validate accordingly.
 
