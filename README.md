@@ -1,44 +1,45 @@
 # Mousecraft                                                     <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/85e1e2fc-9308-42e5-8c03-8616f15092d6" />
                                                                                                                                                                                                                                          
-A fun & splendid GUI used for validating behavior annotations.
+A fun GUI used for classifying and validating behavior annotations.
 
 ## Features
 
-- Load video and motion enegry or classification labels
-- Validate, edit, and add motion events
-- Export results in multiple formats (MF, HF) (.npy, .csv) & plot some performance statistics 
+- Load video and motion signal (eg. motion energy, eye motion) or classification labels (gui labels)
+- Move from onset to onset and accept/reject, edit, or add motion events
+- Export results in multiple formats (.npy, .csv) & plot some performance statistics 
 
 ## Installation
 
 ### Using Conda (Recommended)
 
-For local installation (tried in Windows, to be tried in other os's)
+For local installation (tried in Windows, to be tried in other OS)
 
-1. Install an Anaconda distribution of Python or miniconda (miniforge, if anaconda wont work try via miniforge same commands) & GitBash 
+1. Install an Anaconda distribution of Python or miniconda (miniforge, if anaconda wont work try via miniforge) & GitBash 
 
 2.  Open an anaconda prompt / command prompt with conda for python 3 in the path.
-Navigate where you want the mousecraft to live.
+Navigate where you want the MouseCraft files to live. For example: cd Documents/cd code
 
-3. In git bash do  ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
-If this does not work, do the git clone in GitBash.
+3. Once under code folder do  ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
+If this does not work, do the git clone (step 2: navigate to desired folder and step : clone the repository) in GitBash. 
 
-4. In the anaconda prompt, doo ``cd Mousecraft`` to go into the root folder of mousecraft gui.
+4. Once cloned in the anaconda prompt, do ``cd Mousecraft`` to go into the root folder of MouseCraft GUI.
    
-5. Then create a new environment with ``conda env create -f environment.yml`` . In case creating this environment takes too long, try doing so, in miniconda prompt or else stay in anaconda prompt use conda forge like so: ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``
+5. Then create a new environment with ``conda env create -f environment.yml`` . In case creating this environment takes too long, try ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``. Else, try creating the envirnonment via miniconda.
   
-6. This creates the mousecraft envinroment, which you can then activate running ``conda activate mousecraft`` . 
+6. Activate the MouseCraft environment ``conda activate mousecraft`` . 
    
-7. Once env is activated do: ``pip install -e .`` 
-This installs mousecraft to your local repository!
+7. Once activated do: ``pip install -e .`` 
+This installs mousecraft codes to your local repository!
 
-8. Now run ``python -m mousecraft`` and you're all set. 
-You can also try just ``mousecraft`` but in case this won't work use the above command.
+8. Now run ``python -m mousecraft`` and you're all set. The GUI should open! You have two options Play or Exit buttons - tip: Choose Play to open the GUI! 
 
-### Using pip only
+### Using pip only (alternative installation)
 
 Another way to install the mousecraft package via pip is:
 
 ``pip install git+https://github.com/SofiaZang/Mousecraft.git`` in the same directory where you want the mousecraft repository to live in.
+
+### General
 
 Everytime you want to use Mousecraft, you have to first run ``conda activate mousecraft`` and then: ``mousecraft`` or ``python -m mousecraft`` 
 
@@ -47,7 +48,6 @@ Everytime you want to use Mousecraft, you have to first run ``conda activate mou
 Friendly tip #2: Do not attempt to exit, it won't work :) 
 
 <img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
-
 
 ## Dependencies
 
