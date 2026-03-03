@@ -11,9 +11,13 @@ An annotation algorithm and a GUI used for semi-automatically classifying and va
   To look through the motion annotation algorithm that Mousecraft uses you can look here:
   https://github.com/SofiaZang/Mousecraft/blob/main/demo/demo_classifier.ipynb
 
-The main steps are: 1. Preprocessing and smoothing of motion signal 2. Search for 2 motion states representing high motion or arousal and low motion or rest state and binarisation. 3. Further search for ither motion events (eg. twicthes, fast saccades) that occur during rest. 4. Extraction of onsets-offsets of all events and creation of a 'mousecraft_auto_labels' file that can be inported into the GUI for inspection or editing of detected events.
+The main steps are: 
+1) Preprocessing and smoothing of the motion signal (eg. motion energy/ eye_motion)
+2) Bimodality test to assess whether two distinct motion states exist within the recording - representing high motion or arousal and low motion or rest state. Binary classification to distinct motion states if both arousal and rest are identified
+3) Further search for other transient motion events (eg. twicthes, fast saccades) that occur during rest.
+4) Extraction of onsets/offsets for all detected events and save into 'automatic_annotations_rescaled.xlsx' - as well as creation of a 'mousecraft_auto_labels' file that can be inported into the GUI for inspection or editing of detected events. The algorithm also extracts few visualisations to assess annotation.
 
-The algorithm will work well on small developing mice, but can be adjusted based on the use-case (see filter choice below)
+The algorithm will work well on small developing mice and clear signal-to-noise ratio motion distributions, but can be adjusted if the signal is noisy based on the use-case (see filter choice below)
 
 <img width="1173" height="557" alt="image" src="https://github.com/user-attachments/assets/40abb0b6-1b9b-4a70-8cec-e83227df170a" />
 
@@ -58,7 +62,7 @@ Then the GUI opens!
 
 <img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
 
-Friendly tip #2: Do not attempt to exit, it won't work :) 
+tip: Do not attempt to exit, it won't work :) 
 
 <img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
 
@@ -112,7 +116,7 @@ See here:
 
 <img width="722" height="580" alt="image" src="https://github.com/user-attachments/assets/ea4eb917-f058-4307-89ee-abae05492681" />
 
-You can choose to adjust the thresholds according to your usecase. Generally the annotation will first binarise the signal into 0-1 or Rest-Arousal states (recommended threshold: Otsu) and in a second step detect smaller events embedded within the 0 or Rest period (twitches or complex other movements) that can be interpreted according to your usecase. For example, if your signal is eye motion then the small fast transient changes in motion could be sleep-related fast eey movements. This will work best for clean signals where arousal interchanges with low-motion.
+You can choose to adjust the filter thresholds according to your usecase. Generally the annotation will first binarise the signal into 0-1 or Rest-Arousal states (recommended threshold for bimodal distributions: Otsu) and in a second step will proceed to detect smaller events embedded within the 0/Rest period (twitches or complex other movements) that can be interpreted according to your usecase. For example, if your signal is eye motion then the small fast transient changes in motion could be sleep-related fast eye movements. This second step offers a choice between thresholds: Li, Otsu, MAD, 95 percentile, mean+SD (from more to more permissive, Li is recommended for long-tailed distributions).
 
 <img width="279" height="290" alt="image" src="https://github.com/user-attachments/assets/881c343d-3475-4c76-9670-99faa38cb5cf" />
 
