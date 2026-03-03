@@ -48,8 +48,7 @@ Everytime you want to use Mousecraft, you have to first run ``conda activate mou
 Friendly tip #2: Do not attempt to exit, it won't work :) 
 
 <img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
-<img width="1916" height="1016" alt="Mousecraft_new_v" src="https://github.com/user-attachments/assets/cce28603-d2d5-4f77-bab2-28f0fc4f013c" />
-
+c:\Users\zaggila\Desktop\Mousecraft_GUI_main.PNG
 
 ## Dependencies
 
