@@ -282,7 +282,6 @@ Same information but each line is a frame (in same format as input .csv) and thi
 and also 2 .pngs and .json that showcase the overall performance of mousecraft validation
 
 <img width="4472" height="1676" alt="validation_comparison_plot_final" src="https://github.com/user-attachments/assets/6ead7ed5-d7c9-4074-a92d-6bbec33706d5" />
-<img width="1359" height="1011" alt="validation_status_pie_final" src="https://github.com/user-attachments/assets/c936c207-6bcf-4b6c-a2ae-f25b42b73d14" />
 
 ## License
 
