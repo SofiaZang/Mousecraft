@@ -6,7 +6,16 @@ A fun GUI used for classifying and validating behavior annotations.
 
 - Load video and motion signal (eg. motion energy, eye motion) or classification labels (gui labels)
 - Move from onset to onset and accept/reject, edit, or add motion events
-- Export results in multiple formats (.npy, .csv) & plot some performance statistics 
+- Export results in multiple formats (.npy, .csv) & plot some performance statistics
+
+  To look through the motion annotation algorithm that Mousecraft uses you can look here:
+  https://github.com/SofiaZang/Mousecraft/blob/main/demo/demo_classifier.ipynb
+
+The main steps are: 1. Preprocessing and smoothing of motion signal 2. Search for 2 motion states representing high motion or arousal and low motion or rest state and binarisation. 3. Further search for ither motion events (eg. twicthes, fast saccades) that occur during rest. 4. Extraction of onsets-offsets of all events and creation of a gui_labels file that can be inported into the GUI for inspection or editing of detected events.
+
+The algorithm will work well on small developing mice, but can be adjusted based on the use-case (see filter choice below)
+
+<img width="1173" height="557" alt="image" src="https://github.com/user-attachments/assets/40abb0b6-1b9b-4a70-8cec-e83227df170a" />
 
 ## Installation
 
