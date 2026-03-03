@@ -266,11 +266,11 @@ Mousecraft currently outputs 2 main outputs in .npy and .csv format:
 
 #### validation_HF (Human Friendly) 
 
-<img width="400" height="223" alt="image" src="https://github.com/user-attachments/assets/b12a4357-8e9a-4809-9985-815b4dfe9f56" />
+<img width="405" height="408" alt="image" src="https://github.com/user-attachments/assets/c1f9091c-c0a4-4ae8-a4fb-ffb35b05265a" />
 
 #### validation_MF (Machine Friendly)
 
-<img width="613" height="509" alt="image" src="https://github.com/user-attachments/assets/dac8431f-fa92-4e61-855c-a574f600e2db" />
+<img width="588" height="481" alt="image" src="https://github.com/user-attachments/assets/6c839130-d1b2-49e6-b8a9-0a86c6a5ebd3" />
 
 Same information but each line is a frame (in same format as input .csv) and this is the input you can reload when you continue validating from _pending.
 
