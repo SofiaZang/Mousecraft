@@ -53,7 +53,7 @@ Friendly tip #2: Do not attempt to exit, it won't work :)
 
 <img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
 
-![alt text](Mousecraft_GUI_main-1.PNG)
+<img width="1907" height="1016" alt="Mousecraft_GUI_main" src="https://github.com/user-attachments/assets/cba1c5d0-1f3d-4c0f-9578-4caba0dee7c1" />
 
 ## Dependencies
 
