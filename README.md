@@ -11,7 +11,7 @@ A fun GUI used for classifying and validating behavior annotations.
   To look through the motion annotation algorithm that Mousecraft uses you can look here:
   https://github.com/SofiaZang/Mousecraft/blob/main/demo/demo_classifier.ipynb
 
-The main steps are: 1. Preprocessing and smoothing of motion signal 2. Search for 2 motion states representing high motion or arousal and low motion or rest state and binarisation. 3. Further search for ither motion events (eg. twicthes, fast saccades) that occur during rest. 4. Extraction of onsets-offsets of all events and creation of a gui_labels file that can be inported into the GUI for inspection or editing of detected events.
+The main steps are: 1. Preprocessing and smoothing of motion signal 2. Search for 2 motion states representing high motion or arousal and low motion or rest state and binarisation. 3. Further search for ither motion events (eg. twicthes, fast saccades) that occur during rest. 4. Extraction of onsets-offsets of all events and creation of a 'mousecraft_auto_labels' file that can be inported into the GUI for inspection or editing of detected events.
 
 The algorithm will work well on small developing mice, but can be adjusted based on the use-case (see filter choice below)
 
@@ -120,7 +120,7 @@ Last, load your behavioral video recording in .avi or .mp4. Now you can inspect 
 
 **Annotate in the notebook and load in the GUI for validation-only:
 
-Else, you can independently run the 'motion_classifier.ipynb' notebook and load the 'mousecraft_auto_labels.xlsx' file that the notebook saves under the folder'mouse_motion_average'. This file will loads and displays both motion signal and proposed annotations so you don't need to 'Compute classification' in the GUI.
+Else, you can independently run the 'demonstration_classifier.ipynb' notebook and load the 'mousecraft_auto_labels.xlsx' file that the notebook saves under the folder named 'mouse_motion_average'. This file will loads and displays both motion signal and proposed annotations so you don't need to 'Compute classification' in the GUI.
 
 The notebook will look for the following configuration:
 
