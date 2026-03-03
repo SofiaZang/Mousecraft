@@ -53,6 +53,8 @@ Friendly tip #2: Do not attempt to exit, it won't work :)
 
 <img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
 
+![alt text](Mousecraft_GUI_main-1.PNG)
+
 ## Dependencies
 
 dependencies:
@@ -261,10 +263,11 @@ Same information but each line is a frame (in same format as input .csv) and thi
 
 <img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
 
+
 and also 2 .pngs and .json that showcase the overall performance of mousecraft validation
 
-<img width="1359" height="1011" alt="validation_status_pie_final" src="https://github.com/user-attachments/assets/c936c207-6bcf-4b6c-a2ae-f25b42b73d14" />
 <img width="4472" height="1676" alt="validation_comparison_plot_final" src="https://github.com/user-attachments/assets/6ead7ed5-d7c9-4074-a92d-6bbec33706d5" />
+<img width="1359" height="1011" alt="validation_status_pie_final" src="https://github.com/user-attachments/assets/c936c207-6bcf-4b6c-a2ae-f25b42b73d14" />
 
 ## License
 
