@@ -1,6 +1,6 @@
 # Mousecraft                                                     <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/85e1e2fc-9308-42e5-8c03-8616f15092d6" />
                                                                                                                                                                                                                                          
-A fun GUI used for classifying and validating behavior annotations.
+An annotation algorithm and a GUI used for semi-automatically classifying and validating behavior annotations.
 
 ## Features
 
