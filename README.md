@@ -105,6 +105,8 @@ See here:
 
 You can choose to adjust the thresholds according to your usecase. Generally the annotation will first binarise the signal into 0-1 or Rest-Arousal states (recommended threshold: Otsu) and in a second step detect smaller events embedded within the 0 or Rest period (twitches or complex other movements) that can be interpreted according to your usecase. For example, if your signal is eye motion then the small fast transient changes in motion could be sleep-related fast eey movements. This will work best for clean signals where arousal interchanges with low-motion.
 
+<img width="279" height="290" alt="image" src="https://github.com/user-attachments/assets/881c343d-3475-4c76-9670-99faa38cb5cf" />
+
 Last, load your behavioral video recording in .avi or .mp4. Now you can inspect video and annotations in synch and validate accordingly.
 
 **Annotate in the notebook and load in the GUI for validation-only:
