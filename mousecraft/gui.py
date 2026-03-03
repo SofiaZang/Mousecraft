@@ -207,15 +207,33 @@ class DraggableTimeline(FigureCanvas):
         self.ax.plot(np.arange(self.total_frames), self.motion_energy, color='#1f77b4', linewidth=1)
 
         # Determine which event types to display (if restricted)
-        allowed_types = getattr(self, 'visible_event_types', None)
+        # Expand the allowed set to include any types present in onset_types so newly added types are visible
+        allowed_list = getattr(self, 'visible_event_types', None)
+        allowed_types = None
+        if allowed_list is not None:
+            try:
+                allowed_types = {str(t).lower() for t in allowed_list}
+                present_types = {str(t).lower() for t in (self.onset_types or {}).values()}
+                allowed_types |= present_types
+            except Exception:
+                allowed_types = {str(t).lower() for t in allowed_list}
         # Plot onset-to-offset spans
         for onset in self.onsets:
             onset_type = self.onset_types.get(onset, '')
-            if allowed_types is not None and str(onset_type).lower() not in {t.lower() for t in allowed_types}:
+            if allowed_types is not None and str(onset_type).lower() not in allowed_types:
                 continue
             offset = self.event_offsets.get(onset, onset)
             status = self.event_status.get(onset, '')
-            alpha = 1.0 if status == 'accepted' else 0.4
+            # Improve visibility of newly added/edited events
+            if status == 'accepted':
+                alpha = 1.0
+            elif status == 'edited' or status == 'manually added':
+                alpha = 0.8
+            elif status == 'rejected':
+                alpha = 0.3
+            else:
+                # pending or unknown
+                alpha = 0.6
             # Pick color from mapping with graceful fallback; ignore 'complex'
             color_key = str(onset_type).lower()
             if color_key == 'complex':
@@ -250,14 +268,18 @@ class DraggableTimeline(FigureCanvas):
                     score = 0.5  # Default for edited events
             elif validation == 'accepted':
                 score = 1
+            elif validation == 'lightly edited':
+                score = 1
             elif validation == 'rejected':
                 score = -1
             elif validation == 'manually added':
                 score = 0
             else:
                 score = 0
-            # Assign color based on score
-            if score == 1:
+            # Assign color based on score and validation
+            if validation == 'lightly edited':
+                color = 'green'  # Light green for lightly edited events
+            elif score == 1:
                 color = 'green'
             elif score == 0.5:
                 color = 'orange'
@@ -543,6 +565,7 @@ class MotionAnnotator(QWidget):
             "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
         ]
 
+        self.create_menu_bar()
         self.init_ui()
         self.setup_timer()
         self.unsaved_changes = False  # Track unsaved changes
@@ -622,6 +645,130 @@ class MotionAnnotator(QWidget):
         except Exception:
             pass
 
+    def create_menu_bar(self):
+        """Create the menu bar with Mousecraft menu"""
+        from PyQt5.QtWidgets import QMenuBar, QAction
+        
+        # Create a menu bar widget
+        menubar = QMenuBar(self)
+        
+        # Create Mousecraft menu
+        mousecraft_menu = menubar.addMenu("Mousecraft")
+        
+        # Add actions to the menu
+        new_project_action = QAction("Create New Project", self)
+        new_project_action.setShortcut("Ctrl+N")
+        new_project_action.setStatusTip("Create a new project")
+        new_project_action.triggered.connect(self.create_new_project)
+        mousecraft_menu.addAction(new_project_action)
+        
+        mousecraft_menu.addSeparator()
+        
+        about_action = QAction("About Mousecraft", self)
+        about_action.setStatusTip("Show information about Mousecraft")
+        about_action.triggered.connect(self.show_about)
+        mousecraft_menu.addAction(about_action)
+        
+        # Add Help menu
+        help_menu = menubar.addMenu("Help")
+        
+        # Add help actions
+        readme_action = QAction("GUI Documentation (GitHub)", self)
+        readme_action.setStatusTip("Open GUI documentation on GitHub")
+        readme_action.triggered.connect(self.open_gui_documentation)
+        help_menu.addAction(readme_action)
+        
+        github_action = QAction("Mousecraft Repository", self)
+        github_action.setStatusTip("Open Mousecraft GitHub repository")
+        github_action.triggered.connect(self.open_github_repo)
+        help_menu.addAction(github_action)
+        
+        help_menu.addSeparator()
+        
+        about_action = QAction("About Mousecraft", self)
+        about_action.setStatusTip("Show information about Mousecraft")
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+        
+        # Store the menu bar as an instance variable
+        self.menubar = menubar
+
+    def create_new_project(self):
+        """Create a new project - opens a new window"""
+        # Create a new instance of MotionAnnotator
+        new_annotator = MotionAnnotator()
+        new_annotator.show()
+        
+        # Optionally center the new window
+        if hasattr(new_annotator, 'move'):
+            new_annotator.move(self.x() + 50, self.y() + 50)
+    
+    def reset_to_new_project(self):
+        """Reset the interface to a new project state"""
+        # Clear current data
+        self.onsets = []
+        self.onset_types = {}
+        self.curated_events = {}
+        self.classified_events = {}
+        self.timeline_canvas.onset_validations = {}
+        self.timeline_canvas.event_offsets = {}
+        if hasattr(self, 'event_status'):
+            self.event_status = {}
+        
+        # Reset video
+        self.video_path = None
+        self.video_label.setText("Load a video to start")
+        self.video_folder_label.setText("")
+        
+        # Reset motion energy
+        self.motion_energy = None
+        self.motion_energy_folder_label.setText("")
+        
+        # Clear timelines by replotting with empty data
+        if hasattr(self.timeline_canvas, 'plot_motion_energy'):
+            self.timeline_canvas.plot_motion_energy([], [], {}, {}, None)
+        if hasattr(self, 'timeline_canvas2') and hasattr(self.timeline_canvas2, 'plot_motion_energy'):
+            self.timeline_canvas2.plot_motion_energy([], [], {}, {}, None)
+        
+        # Reset zoom
+        self.reset_zoom_timeline()
+        self.reset_video_zoom()
+        
+        QMessageBox.information(self, "New Project", "New project created successfully!")
+    
+    def show_about(self):
+        """Show about dialog"""
+        about_text = """
+        <h2>Mousecraft</h2>
+        <p>Version: 1.0</p>
+        <p>A tool for behavioral event classification and validation in mouse videos.</p>
+        <p>Features:</p>
+        <ul>
+            <li>Automatic event classification</li>
+            <li>Manual validation and editing</li>
+            <li>Custom event types</li>
+            <li>Export capabilities</li>
+        </ul>
+        <p>© 2025 Mousecraft Team</p>
+        """
+        QMessageBox.about(self, "About Mousecraft", about_text)
+
+    def open_gui_documentation(self):
+        """Open GUI documentation on GitHub"""
+        import webbrowser
+        try:
+            webbrowser.open("https://github.com/SofiaZang/Mousecraft")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not open documentation: {str(e)}")
+    
+    def open_github_repo(self):
+        """Open Mousecraft GitHub repository"""
+        import webbrowser
+        try:
+            webbrowser.open("https://github.com/SofiaZang/Mousecraft")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not open repository: {str(e)}")
+
     def resizeEvent(self, event):
         try:
             if getattr(self, 'busy_overlay', None) is not None and self.busy_overlay.isVisible():
@@ -632,6 +779,10 @@ class MotionAnnotator(QWidget):
 
     def init_ui(self):
         main_layout = QVBoxLayout()
+        
+        # Add the menu bar at the top
+        main_layout.addWidget(self.menubar)
+        
         # Add MouseCraft logo at the top, centered
         logo_label = QLabel()
         logo_label.setAlignment(Qt.AlignCenter)
@@ -997,7 +1148,7 @@ class MotionAnnotator(QWidget):
         filter_layout.addWidget(self.onset_filter_combo)
         filter_layout.addWidget(QLabel("Event status"))
         self.status_filter_combo = QComboBox()
-        self.status_filter_combo.addItems(["All", "Edited", "Pending", "Accepted", "Rejected", "Manually Added"])
+        self.status_filter_combo.addItems(["All", "Edited", "Lightly Edited", "Pending", "Accepted", "Rejected", "Manually Added"])
         self.status_filter_combo.currentIndexChanged.connect(self.update_onset_filter)
         filter_layout.addWidget(self.status_filter_combo)
         onset_layout.addLayout(filter_layout)
@@ -1203,13 +1354,29 @@ class MotionAnnotator(QWidget):
                     src_box.addWidget(self.radio_me)
                     layout.addLayout(src_box)
 
+                    # Keep a reference to parent for accessing loaded inputs
+                    self.parent_ref = parent
+
+                    # Video source selector (Use Input 1 / Use Input 2 / Browse file…)
+                    self.video_source_combo = QComboBox()
+                    self.video_source_combo.addItem("Browse file…")
+                    try:
+                        # Offer Input 1 if a video OR an ME for input 1 is available
+                        if getattr(parent, 'video_path', None) or getattr(parent, 'motion_energy_path', None):
+                            self.video_source_combo.addItem("Use Input 1")
+                        # Offer Input 2 if a second video OR a second ME is available
+                        if getattr(parent, 'second_video_path', None) or getattr(parent, 'motion_energy_path2', None):
+                            self.video_source_combo.addItem("Use Input 2")
+                    except Exception:
+                        pass
+
                     # Video picker (only used if no video already loaded in GUI)
                     vid_box = QHBoxLayout()
                     self.video_path_edit = QLineEdit()
                     self.video_path_edit.setPlaceholderText("Select a .tif/.tiff/.avi file…")
                     browse_btn = QPushButton("Browse…")
                     def on_browse():
-                        path, _ = QFileDialog.getOpenFileName(self, "Select video file", "", "Video/Stacks (*.tif *.tiff *.avi)")
+                        path, _ = QFileDialog.getOpenFileName(self, "Select video file", "", "Videos/Stacks (*.tif *.tiff *.avi *.mp4 *.mov *.mkv *.m4v *.mpg *.mpeg *.wmv *.webm *.flv)")
                         if path:
                             self.video_path_edit.setText(path)
                             self.radio_video.setChecked(True)
@@ -1227,6 +1394,8 @@ class MotionAnnotator(QWidget):
                     browse_btn.clicked.connect(on_browse)
                     # Keep a handle to toggle enabled state later
                     self.browse_btn = browse_btn
+                    # Add source selector before path
+                    vid_box.addWidget(self.video_source_combo)
                     vid_box.addWidget(self.video_path_edit)
                     vid_box.addWidget(browse_btn)
                     layout.addLayout(vid_box)
@@ -1378,12 +1547,44 @@ class MotionAnnotator(QWidget):
                     self.resize(720, 420)
 
                     # Live enable/disable of OK button and source widgets
+                    def _apply_video_source_choice():
+                        # Adjust path field based on selection
+                        choice = self.video_source_combo.currentText()
+                        if choice.startswith("Use Input 1"):
+                            # Prefer showing the associated path for clarity; for ME mode we won't use this edit box
+                            if getattr(self.parent_ref, 'video_path', None):
+                                self.video_path_edit.setText(self.parent_ref.video_path)
+                            elif getattr(self.parent_ref, 'motion_energy_path', None):
+                                self.video_path_edit.setText(self.parent_ref.motion_energy_path)
+                            self.video_path_edit.setEnabled(False)
+                            if hasattr(self, 'browse_btn'):
+                                self.browse_btn.setEnabled(False)
+                        elif choice.startswith("Use Input 2"):
+                            if getattr(self.parent_ref, 'second_video_path', None):
+                                self.video_path_edit.setText(self.parent_ref.second_video_path)
+                            elif getattr(self.parent_ref, 'motion_energy_path2', None):
+                                self.video_path_edit.setText(self.parent_ref.motion_energy_path2)
+                            self.video_path_edit.setEnabled(False)
+                            if hasattr(self, 'browse_btn'):
+                                self.browse_btn.setEnabled(False)
+                        else:
+                            # Browse file…
+                            self.video_path_edit.setEnabled(True)
+                            if hasattr(self, 'browse_btn'):
+                                self.browse_btn.setEnabled(True)
+                        self._update_ok_enabled()
+
                     def _update_sources_enabled():
                         use_video = self.radio_video.isChecked()
-                        # Enable/disable video-related widgets
-                        self.video_path_edit.setEnabled(use_video)
-                        if hasattr(self, 'browse_btn'):
-                            self.browse_btn.setEnabled(use_video)
+                        # Input selector enabled for both sources so user can target Input 1/2 even with ME
+                        self.video_source_combo.setEnabled(True)
+                        if not use_video:
+                            # For ME: disable direct file browse; we still allow associating to Input 1/2
+                            self.video_path_edit.setEnabled(False)
+                            if hasattr(self, 'browse_btn'):
+                                self.browse_btn.setEnabled(False)
+                        else:
+                            _apply_video_source_choice()
                         self.fps_edit.setEnabled(use_video)
                         # Averaging: allowed for both sources
                         self.avg_edit.setEnabled(True)
@@ -1391,12 +1592,14 @@ class MotionAnnotator(QWidget):
                             self.avg_edit.setPlaceholderText("enter a positive integer, e.g. 5 (use 1 for no averaging)")
 
                     self._update_sources_enabled = _update_sources_enabled
+                    self._apply_video_source_choice = _apply_video_source_choice
 
                     self.radio_video.toggled.connect(self._update_ok_enabled)
                     self.radio_me.toggled.connect(self._update_ok_enabled)
                     self.radio_video.toggled.connect(self._update_sources_enabled)
                     self.radio_me.toggled.connect(self._update_sources_enabled)
                     self.video_path_edit.textChanged.connect(self._update_ok_enabled)
+                    self.video_source_combo.currentTextChanged.connect(self._apply_video_source_choice)
                     self.avg_edit.textChanged.connect(self._update_ok_enabled)
                     # Enable/disable range inputs based on scope selection
                     def _update_range_enabled():
@@ -1415,7 +1618,8 @@ class MotionAnnotator(QWidget):
                     want_video = self.radio_video.isChecked()
                     if want_video:
                         # Require a valid path when computing from a video
-                        ok = len(self.video_path_edit.text().strip()) > 0 and os.path.exists(self.video_path_edit.text().strip())
+                        path_txt = self.video_path_edit.text().strip()
+                        ok = len(path_txt) > 0 and os.path.exists(path_txt)
                     else:
                         ok = self.radio_me.isEnabled()  # enabled only if ME is available
                     # Require averaging for both sources
@@ -1444,14 +1648,26 @@ class MotionAnnotator(QWidget):
             args = [sys.executable, script_path]
             # Source selection
             me_path = getattr(self, 'motion_energy_path', None)
+            selected_input_choice = dlg.video_source_combo.currentText() if hasattr(dlg, 'video_source_combo') else None
+            self._last_selected_input_choice = selected_input_choice
             if dlg.radio_me.isChecked():
-                if me_path and os.path.exists(me_path):
-                    args.append(me_path)
+                # Explicitly honor selected ME path per input
+                use_me = None
+                if isinstance(selected_input_choice, str) and selected_input_choice.startswith('Use Input 2'):
+                    use_me = getattr(self, 'motion_energy_path2', None)
+                elif isinstance(selected_input_choice, str) and selected_input_choice.startswith('Use Input 1'):
+                    use_me = getattr(self, 'motion_energy_path', None)
+                # Fallback to globally selected ME
+                if not use_me:
+                    use_me = me_path
+                if use_me and os.path.exists(use_me):
+                    args.append(use_me)
+                else:
+                    QMessageBox.critical(self, "Missing Motion Energy", "No Motion Energy file found for the selected input. Load it first or select the other input.")
+                    return
             else:
-                # Prefer the dialog-selected video path; fallback to already loaded video if empty
+                # Use the path shown in the dialog (reflects Input 1/2/custom choice)
                 video_path = dlg.video_path_edit.text().strip()
-                if not video_path:
-                    video_path = getattr(self, 'video_path', None)
                 if video_path:
                     args.append(video_path)
             # Append threshold choices as positional args expected by the script
@@ -1524,31 +1740,117 @@ class MotionAnnotator(QWidget):
                 if success:
                     try:
                         me_path_local = getattr(self, 'motion_energy_path', None)
-                        base_dir = None
+                        base_dir_candidates = []
+                        # 1) Preferred: user-selected input in the dialog (Input 1/2)
+                        choice = getattr(self, '_last_selected_input_choice', None)
+                        if isinstance(choice, str):
+                            if choice.startswith('Use Input 2') and getattr(self, 'second_video_path', None):
+                                base_dir_candidates.append(os.path.dirname(self.second_video_path))
+                            if choice.startswith('Use Input 1') and getattr(self, 'video_path', None):
+                                base_dir_candidates.append(os.path.dirname(self.video_path))
+                        # 2) ME directory (when running on precomputed ME)
                         if me_path_local and os.path.exists(me_path_local):
-                            base_dir = os.path.dirname(me_path_local)
-                        else:
-                            # Fallback: if computed from a loaded video, use its folder
-                            vid_path_local = getattr(self, 'video_path', None)
-                            if vid_path_local and os.path.exists(vid_path_local):
-                                base_dir = os.path.dirname(vid_path_local)
-                            else:
-                                # As a last resort, try second video
-                                vid2_path_local = getattr(self, 'second_video_path', None)
-                                if vid2_path_local and os.path.exists(vid2_path_local):
-                                    base_dir = os.path.dirname(vid2_path_local)
+                            base_dir_candidates.append(os.path.dirname(me_path_local))
+                        # 3) Video folders as fallbacks
+                        vid_path_local = getattr(self, 'video_path', None)
+                        if vid_path_local and os.path.exists(vid_path_local):
+                            base_dir_candidates.append(os.path.dirname(vid_path_local))
+                        vid2_path_local = getattr(self, 'second_video_path', None)
+                        if vid2_path_local and os.path.exists(vid2_path_local):
+                            base_dir_candidates.append(os.path.dirname(vid2_path_local))
 
-                        if base_dir and os.path.exists(base_dir):
+                        # Try candidates in order
+                        for base_dir in base_dir_candidates:
+                            if not base_dir or not os.path.exists(base_dir):
+                                continue
                             out_dir = os.path.join(base_dir, 'mousecraft_automatic_classifications')
                             labels_path = os.path.join(out_dir, 'mousecraft_auto_labels.csv')
                             summary_path = os.path.join(out_dir, 'analysis_summary.json')
                             if os.path.exists(labels_path):
-                                self.load_framewise_table(labels_path)
-                                loaded_labels = True
+                                # Load into the appropriate timeline based on selection
+                                choice = getattr(self, '_last_selected_input_choice', None)
+                                if isinstance(choice, str) and choice.startswith('Use Input 2'):
+                                    # Secondary timeline load (isolate from primary)
+                                    try:
+                                        import pandas as pd
+                                        df = pd.read_csv(labels_path) if labels_path.endswith('.csv') else pd.read_excel(labels_path)
+                                        # Motion energy to secondary if present
+                                        if 'motion_energy' in df.columns:
+                                            self.timeline_canvas2.motion_energy = pd.to_numeric(df['motion_energy'], errors='coerce').fillna(0).values.astype(np.float64)
+                                            self.timeline_canvas2.total_frames = len(self.timeline_canvas2.motion_energy)
+                                        else:
+                                            # infer length
+                                            if 'frame_idx' in df.columns:
+                                                n2 = int(df['frame_idx'].max()) + 1
+                                            else:
+                                                num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+                                                n2 = len(df[num_cols[0]]) if num_cols else 1000
+                                            self.timeline_canvas2.motion_energy = np.zeros(n2, dtype=np.float64)
+                                            self.timeline_canvas2.total_frames = n2
+                                        # Parse events to secondary structures
+                                        ignore_cols = {'motion_energy', 'status', 'score', 'frame_idx'}
+                                        cand_cols = []
+                                        for c in df.columns:
+                                            if c in ignore_cols: continue
+                                            if not pd.api.types.is_numeric_dtype(df[c]): continue
+                                            series = pd.to_numeric(df[c], errors='coerce')
+                                            vals = pd.unique(series.dropna().round(0))
+                                            uniques = set([float(v) for v in vals.tolist()])
+                                            if uniques.issubset({0.0,1.0}) and (series.fillna(0).round(0).astype(int) == 1).any():
+                                                cand_cols.append(c)
+                                        self.onsets2 = []
+                                        self.onset_types2 = {}
+                                        self.timeline_canvas2.event_offsets = {}
+                                        for col in cand_cols:
+                                            etype = str(col).lower().strip()
+                                            arr = df[col].fillna(0).astype(int).values
+                                            in_event=False; onset=None
+                                            for i,val in enumerate(arr):
+                                                if val==1 and not in_event:
+                                                    onset=i; in_event=True
+                                                elif (val==0 or i==len(arr)-1) and in_event:
+                                                    offset = i-1 if val==0 else i
+                                                    if onset not in self.onsets2:
+                                                        self.onsets2.append(onset)
+                                                        self.onset_types2[onset]=etype
+                                                        self.timeline_canvas2.event_offsets[onset]=offset
+                                                    in_event=False
+                                            if in_event and onset is not None:
+                                                offset=len(arr)-1
+                                                if onset not in self.onsets2:
+                                                    self.onsets2.append(onset)
+                                                    self.onset_types2[onset]=etype
+                                                    self.timeline_canvas2.event_offsets[onset]=offset
+                                        # Plot on secondary timeline and show it
+                                        if not self.timeline_canvas2.isVisible():
+                                            self.timeline_canvas2.show()
+                                            try:
+                                                self.timeline_splitter.setSizes([1,1])
+                                            except Exception:
+                                                pass
+                                        self.timeline_canvas2.plot_motion_energy(
+                                            self.timeline_canvas2.motion_energy,
+                                            getattr(self, 'onsets2', []),
+                                            getattr(self, 'onset_types2', {}),
+                                            getattr(self.timeline_canvas2, 'event_offsets', {}),
+                                            None
+                                        )
+                                        # Enable annotate radio for secondary
+                                        if hasattr(self, 'annotate_secondary_radio'):
+                                            self.annotate_secondary_radio.setEnabled(True)
+                                        loaded_labels = True
+                                    except Exception:
+                                        loaded_labels = False
+                                else:
+                                    # Default: load into primary timeline
+                                    self.load_framewise_table(labels_path)
+                                    loaded_labels = True
                             if os.path.exists(summary_path):
                                 import json
                                 with open(summary_path, 'r', encoding='utf-8') as f:
                                     summary_data = json.load(f)
+                            if loaded_labels or summary_data:
+                                break
                     except Exception:
                         loaded_labels = False
                 close_btn.setEnabled(True)
@@ -1560,6 +1862,18 @@ class MotionAnnotator(QWidget):
                     pass
                 if success and loaded_labels:
                     log_view.append("\n✅ Done. mousecraft_auto_labels.csv loaded into the timeline.")
+                    # Crop video to match classification range if applicable
+                    try:
+                        # Get the frame range from the loaded classification data
+                        if hasattr(self, 'input_classification_df') and self.input_classification_df is not None:
+                            df = self.input_classification_df
+                            if 'frame_idx' in df.columns:
+                                start_frame = int(df['frame_idx'].min())
+                                end_frame = int(df['frame_idx'].max()) + 1
+                                self.crop_video_to_classification_range(start_frame, end_frame)
+                                log_view.append(f"\n📹 Video cropped to frames {start_frame}-{end_frame} to match classification.")
+                    except Exception as e:
+                        log_view.append(f"\n⚠️ Warning: Could not crop video to classification range: {e}")
                 elif success:
                     log_view.append("\n✅ Done. Outputs saved in mousecraft_automatic_classifications.")
                 else:
@@ -1579,6 +1893,21 @@ class MotionAnnotator(QWidget):
                             grid.addWidget(QLabel(str(value)), r, 1)
 
                         r = 0
+                        # Add folder information at the top
+                        paths = summary_data.get('paths', {})
+                        parent_folder = paths.get('parent_folder')
+                        grandparent_folder = paths.get('grandparent_folder')
+                        if parent_folder or grandparent_folder:
+                            folder_info = []
+                            if grandparent_folder:
+                                folder_info.append(grandparent_folder)
+                            if parent_folder:
+                                folder_info.append(parent_folder)
+                            folder_title = " > ".join(folder_info)
+                            add_row(r, "Dataset", folder_title); r += 1
+                            # Update main window title
+                            self.setWindowTitle(f"MouseCraft - {folder_title}")
+                        
                         add_row(r, "Mode", summary_data.get('mode')); r += 1
                         snr = summary_data.get('snr'); add_row(r, "SNR", f"{snr:.3f}" if isinstance(snr, (int,float)) else snr); r += 1
                         smooth = summary_data.get('smoothing', {})
@@ -1684,11 +2013,16 @@ class MotionAnnotator(QWidget):
                     return
                 self.is_tiff = True
                 self.cap = None
+                # try:
+                #     self.total_frames = len(self.tiff_reader.pages)
+                # except Exception:
+                #     # Fallback: single image
+                #     self.total_frames = 1
+                
                 try:
-                    self.total_frames = len(self.tiff_reader.pages)
+                    self.total_frames = self.tiff_reader.series[0].shape[0]
                 except Exception:
-                    # Fallback: single image
-                    self.total_frames = 1
+                    self.total_frames = len(self.tiff_reader.pages)
             else:
                 self.cap = cv2.VideoCapture(self.video_path)
                 if not self.cap.isOpened():
@@ -2183,6 +2517,8 @@ class MotionAnnotator(QWidget):
             # Motion energy only
                 second_motion = np.load(fname)
                 self.timeline_canvas2.motion_energy = second_motion
+                # Remember path for analysis dialog
+                self.motion_energy_path2 = fname
                 self.timeline_canvas2.onsets = []
                 self.timeline_canvas2.onset_types = {}
                 self.timeline_canvas2.event_offsets = {}
@@ -2211,35 +2547,62 @@ class MotionAnnotator(QWidget):
                 classified_loaded = True
 
             elif lower.endswith('.csv') or lower.endswith('.xlsx'):
-                # Try as classifications
-                try:
-                    # Load as classifications for secondary
-                    self.onsets2, self.onset_types2, self.timeline_canvas2.event_offsets = self.load_classifications_from_path(fname)
-                    # Also extract motion energy for secondary if available
-                    try:
-                        if lower.endswith('.csv'):
-                            df2 = pd.read_csv(fname)
-                        else:
-                            df2 = pd.read_excel(fname)
-                        if 'motion_energy' in df2.columns:
-                            self.timeline_canvas2.motion_energy = df2['motion_energy'].values.astype(np.float64)
-                    except Exception:
-                        pass
-                    classified_loaded = True
-                except Exception:
-                    # fallback: motion-only
-                    if lower.endswith('.csv'):
-                        df = pd.read_csv(fname)
+                # Load classifications into secondary directly (do not touch primary)
+                if lower.endswith('.csv'):
+                    df2 = pd.read_csv(fname)
+                else:
+                    df2 = pd.read_excel(fname)
+                # Motion energy for secondary if provided, else infer length
+                if 'motion_energy' in df2.columns:
+                    self.timeline_canvas2.motion_energy = pd.to_numeric(df2['motion_energy'], errors='coerce').fillna(0).values.astype(np.float64)
+                else:
+                    if 'frame_idx' in df2.columns:
+                        n2 = int(df2['frame_idx'].max()) + 1
                     else:
-                        df = pd.read_excel(fname)
-                    second_motion = df.select_dtypes(include=[np.number]).iloc[:, 0].values
-                    self.timeline_canvas2.motion_energy = second_motion
-                    self.timeline_canvas2.onsets = []
-                    self.timeline_canvas2.onset_types = {}
-                    self.timeline_canvas2.event_offsets = {}
-                    self.timeline_canvas2.onset_validations = {}
-                    self.manual_mode_secondary = True
-                    classified_loaded = False
+                        num_cols2 = [c for c in df2.columns if pd.api.types.is_numeric_dtype(df2[c])]
+                        n2 = len(df2[num_cols2[0]]) if num_cols2 else 1000
+                    self.timeline_canvas2.motion_energy = np.zeros(n2, dtype=np.float64)
+                # Parse binary event columns into secondary
+                ignore_cols2 = {'motion_energy', 'status', 'score', 'frame_idx'}
+                cand_cols2 = []
+                for c in df2.columns:
+                    if c in ignore_cols2:
+                        continue
+                    if not pd.api.types.is_numeric_dtype(df2[c]):
+                        continue
+                    series2 = pd.to_numeric(df2[c], errors='coerce')
+                    vals2 = pd.unique(series2.dropna().round(0))
+                    uniques2 = set([float(v) for v in vals2.tolist()])
+                    if uniques2.issubset({0.0, 1.0}) and (series2.fillna(0).round(0).astype(int) == 1).any():
+                        cand_cols2.append(c)
+                self.onsets2 = []
+                self.onset_types2 = {}
+                self.timeline_canvas2.event_offsets = {}
+                for col in cand_cols2:
+                    etype2 = str(col).lower().strip()
+                    arr2 = df2[col].fillna(0).astype(int).values
+                    in_event2 = False
+                    onset2 = None
+                    for i2, val2 in enumerate(arr2):
+                        if val2 == 1 and not in_event2:
+                            onset2 = i2
+                            in_event2 = True
+                        elif (val2 == 0 or i2 == len(arr2) - 1) and in_event2:
+                            offset2 = i2 - 1 if val2 == 0 else i2
+                            if onset2 not in self.onsets2:
+                                self.onsets2.append(onset2)
+                                self.onset_types2[onset2] = etype2
+                                self.timeline_canvas2.event_offsets[onset2] = offset2
+                            in_event2 = False
+                    if in_event2 and onset2 is not None:
+                        offset2 = len(arr2) - 1
+                        if onset2 not in self.onsets2:
+                            self.onsets2.append(onset2)
+                            self.onset_types2[onset2] = etype2
+                            self.timeline_canvas2.event_offsets[onset2] = offset2
+                self.timeline_canvas2.onset_validations = {o: 'pending' for o in self.onsets2}
+                self.manual_mode_secondary = False
+                classified_loaded = True
 
             else:
                 QMessageBox.warning(
@@ -2456,6 +2819,60 @@ class MotionAnnotator(QWidget):
         
     def load_json_classifications(self, fname):
         """Load classifications from JSON format"""
+        import os
+        
+        # Try to load custom colors from multiple sources
+        colors_loaded = False
+        
+        # 1. Try from a separate colors file in the same directory
+        colors_file = os.path.splitext(fname)[0] + '_colors.json'
+        if os.path.exists(colors_file):
+            try:
+                with open(colors_file, 'r') as f:
+                    custom_colors = json.load(f)
+                    # Merge custom colors with existing ones (custom colors take precedence)
+                    if hasattr(self, 'event_type_colors'):
+                        self.event_type_colors.update(custom_colors)
+                    else:
+                        self.event_type_colors = custom_colors
+                    colors_loaded = True
+            except Exception:
+                pass  # If colors file is corrupted, continue without it
+        
+        # 2. Try from the mousecraft_output directory in the same folder
+        if not colors_loaded:
+            try:
+                json_dir = os.path.dirname(fname)
+                output_dir = os.path.join(json_dir, 'mousecraft_output')
+                colors_file = os.path.join(output_dir, 'event_type_colors.json')
+                if os.path.exists(colors_file):
+                    with open(colors_file, 'r') as f:
+                        custom_colors = json.load(f)
+                        if hasattr(self, 'event_type_colors'):
+                            self.event_type_colors.update(custom_colors)
+                        else:
+                            self.event_type_colors = custom_colors
+                        colors_loaded = True
+            except Exception:
+                pass
+        
+        # 3. Try from the output directory if it exists
+        if not colors_loaded and hasattr(self, 'export_path_lineedit'):
+            try:
+                export_path = self.export_path_lineedit.text()
+                if export_path:
+                    colors_file = os.path.join(export_path, 'mousecraft_output', 'event_type_colors.json')
+                    if os.path.exists(colors_file):
+                        with open(colors_file, 'r') as f:
+                            custom_colors = json.load(f)
+                            if hasattr(self, 'event_type_colors'):
+                                self.event_type_colors.update(custom_colors)
+                            else:
+                                self.event_type_colors = custom_colors
+                            colors_loaded = True
+            except Exception:
+                pass
+        
         with open(fname, 'r') as f:
             self.classified_events = json.load(f)
             
@@ -2473,7 +2890,7 @@ class MotionAnnotator(QWidget):
             # Register unseen types: add to available list, assign color, and propagate to canvases
             if etype not in self.available_event_types:
                 self.available_event_types.append(etype)
-                # Assign a color from palette if not present
+                # Only assign color if not already present (preserve custom colors)
                 if etype not in self.event_type_colors:
                     # Pick next palette color not already used
                     used = {c.lower() for c in self.event_type_colors.values()}
@@ -2691,6 +3108,38 @@ class MotionAnnotator(QWidget):
         if event_type == "Select type…":
             QMessageBox.warning(self, "Invalid Event Type", "Please select an event type (twitch or active) before adding the event.")
             return
+        # Register unseen event types dynamically and update UI/plots
+        if event_type not in self.available_event_types:
+            self.available_event_types.append(event_type)
+            if event_type not in self.event_type_colors:
+                used = {c.lower() for c in self.event_type_colors.values()}
+                picked = None
+                for c in self._auto_palette:
+                    if c.lower() not in used:
+                        picked = c
+                        break
+                if picked is None:
+                    picked = f"#{hash(event_type) & 0xFFFFFF:06x}"
+                self.event_type_colors[event_type] = picked
+            if hasattr(self, 'event_type_combo'):
+                current_placeholder = self.event_type_combo.itemText(0) if self.event_type_combo.count() > 0 else "Select type…"
+                self.event_type_combo.clear()
+                self.event_type_combo.addItem(current_placeholder)
+                self.event_type_combo.addItems(self.available_event_types)
+                self.event_type_combo.setCurrentIndex(0)
+            if hasattr(self, 'onset_filter_combo'):
+                current_idx = self.onset_filter_combo.currentIndex() if self.onset_filter_combo.count() > 0 else 0
+                self.onset_filter_combo.clear()
+                self.onset_filter_combo.addItems(["All"] + [t.capitalize() for t in self.available_event_types])
+                if current_idx < self.onset_filter_combo.count():
+                    self.onset_filter_combo.setCurrentIndex(current_idx)
+            if hasattr(self, 'change_type_dropdown') and self.change_type_dropdown is not None:
+                self.change_type_dropdown.clear()
+                self.change_type_dropdown.addItems(self.available_event_types)
+            if hasattr(self, 'timeline_canvas'):
+                self.timeline_canvas.event_type_colors = dict(self.event_type_colors)
+            if hasattr(self, 'timeline_canvas2'):
+                self.timeline_canvas2.event_type_colors = dict(self.event_type_colors)
         if onset >= offset_exclusive:
             QMessageBox.warning(self, "Invalid Event", 
                 f"Offset frame ({offset_exclusive}) must be greater than onset frame ({onset}).\n\n"
@@ -2961,10 +3410,15 @@ class MotionAnnotator(QWidget):
             self.pause()
             
     def show_frame(self, frame_num):
+        # Account for video cropping if applicable
+        actual_frame = frame_num
+        if hasattr(self, 'video_start_frame'):
+            actual_frame = frame_num + self.video_start_frame
+        
         if self.cap is None:
             return
             
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, actual_frame)
         ret, frame = self.cap.read()
         if not ret:
             return
@@ -3091,6 +3545,35 @@ class MotionAnnotator(QWidget):
             pass
         self.setFocus()
         
+        if self.is_tiff:
+            frame = self.get_tiff_frame(index)
+        else:
+            ret, frame = self.cap.read()
+        
+    def get_tiff_frame(self, index):
+        # Account for video cropping if applicable
+        actual_index = index
+        if hasattr(self, 'video_start_frame'):
+            actual_index = index + self.video_start_frame
+            
+        # Essaye d'abord via series
+        try:
+            arr = self.tiff_reader.series[0].asarray()
+            frame = arr[actual_index]
+        except Exception:
+            # fallback simple : pages
+            frame = self.tiff_reader.pages[actual_index].asarray()
+
+        # conversion en uint8 pour affichage PyQt
+        if frame.dtype != np.uint8:
+            frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+        # si grayscale → convertir en RGB
+        if len(frame.shape) == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+
+        return frame    
+        
     def slider_moved(self, value):
         self.current_frame = value
         self.show_frame(value)
@@ -3172,6 +3655,8 @@ class MotionAnnotator(QWidget):
             # Handle the "Manually Added" case specifically
             if status_text == "manually added":
                 filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending') == 'manually added']
+            elif status_text == "lightly edited":
+                filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending') == 'lightly edited']
             else:
                 filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending').lower() == status_text]
         self.filtered_onsets = filtered
@@ -3228,7 +3713,9 @@ class MotionAnnotator(QWidget):
                     recenter_needed = True
                     if current_xlim is not None and self.lock_timeline_zoom:
                         left_vis, right_vis = current_xlim
-                        if left_vis <= onset_frame <= right_vis:
+                        # Add margin so onset doesn't sit at the very edge
+                        margin = view_width * 0.1  # 10% margin on each side
+                        if (left_vis + margin) <= onset_frame <= (right_vis - margin):
                             recenter_needed = False
                     if recenter_needed:
                         half = view_width / 2.0
@@ -3684,14 +4171,17 @@ class MotionAnnotator(QWidget):
             del self.original_onsets[old_onset]
         # Set validation and score based on shift
         prev_status = self.timeline_canvas.onset_validations.get(new_onset, 'pending')
-        if prev_status != 'edited':
+        if prev_status != 'edited' and prev_status != 'lightly edited':
             self.undo_stack.append((new_onset, prev_status, old_onset, orig_onset, old_offset_before_edit, self.original_offsets.get(old_onset, old_offset_before_edit)))
-        self.timeline_canvas.onset_validations[new_onset] = 'edited'
+        # Use 'lightly edited' status for minor edits (< edit_threshold)
+        if shift < self.edit_threshold:
+            self.timeline_canvas.onset_validations[new_onset] = 'lightly edited'
+            score = 1
+        else:
+            self.timeline_canvas.onset_validations[new_onset] = 'edited'
+            score = 0.5
         if hasattr(self, 'event_status'):
-            if shift < self.edit_threshold:
-                self.event_status[new_onset] = 1
-            else:
-                self.event_status[new_onset] = 0.5
+            self.event_status[new_onset] = score
             if old_onset in self.event_status:
                 del self.event_status[old_onset]
         self.edit_widget.hide()
@@ -3730,6 +4220,8 @@ class MotionAnnotator(QWidget):
                 scores.append(1)
             elif status == 'rejected':
                 scores.append(-1)
+            elif status == 'lightly edited':
+                scores.append(1)
             elif status == 'edited':
                 scores.append(0.5)
             elif status == 'manually added':
@@ -3789,6 +4281,8 @@ Average Score: {avg_score:.3f}
                     score = 1
                 elif status == 'rejected':
                     score = -1
+                elif status == 'lightly edited':
+                    score = 1
                 elif status == 'edited':
                     score = 0.5
                 elif status == 'manually added':
@@ -3830,6 +4324,101 @@ Average Score: {avg_score:.3f}
             }
             with open(metrics_path, 'w') as f:
                 json.dump(results, f, indent=2)
+            # Save per-frame MF CSV with one column per event type
+            try:
+                import numpy as np
+                # Determine total length: prefer motion_energy, else infer from max offset or UI state
+                if getattr(self, 'motion_energy', None) is not None and len(self.motion_energy) > 0:
+                    total_len = len(self.motion_energy)
+                else:
+                    max_off = 0
+                    # from export_events (offset already inclusive-end+1)
+                    for _, offset, *_ in export_events:
+                        try:
+                            max_off = max(max_off, int(offset))
+                        except Exception:
+                            pass
+                    # from timeline current offsets (inclusive), convert to exclusive by +1
+                    try:
+                        if hasattr(self, 'timeline_canvas') and hasattr(self.timeline_canvas, 'event_offsets'):
+                            for off_incl in (self.timeline_canvas.event_offsets or {}).values():
+                                try:
+                                    max_off = max(max_off, int(off_incl) + 1)
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+                    total_len = int(max_off)
+                    # Fallbacks if still zero: use known UI limits
+                    if total_len <= 0:
+                        try:
+                            if hasattr(self, 'total_frames') and int(self.total_frames) > 0:
+                                total_len = int(self.total_frames)
+                        except Exception:
+                            pass
+                        if total_len <= 0:
+                            try:
+                                if hasattr(self, 'frame_slider'):
+                                    total_len = int(self.frame_slider.maximum()) + 1
+                            except Exception:
+                                pass
+                        if total_len <= 0:
+                            total_len = 1000
+                frame_idx = np.arange(total_len, dtype=int)
+                # Collect all event types from export, current timeline, and available list
+                event_types_all = set([ev[2] for ev in export_events])
+                try:
+                    event_types_all |= {str(t) for t in (self.onset_types or {}).values()}
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, 'available_event_types') and self.available_event_types is not None:
+                        event_types_all |= {str(t) for t in self.available_event_types}
+                except Exception:
+                    pass
+                event_types_all = sorted(event_types_all)
+                mf_dict = {
+                    'frame_idx': frame_idx,
+                }
+                # Attach motion_energy if available
+                try:
+                    if total_len > 0:
+                        mf_dict['motion_energy'] = np.asarray(self.motion_energy, dtype=float)
+                except Exception:
+                    pass
+                # Initialize binary columns
+                for et in event_types_all:
+                    mf_dict[str(et)] = np.zeros(total_len, dtype=int)
+                # Fill spans from export_events
+                for onset, offset, et, status, score in export_events:
+                    et_key = str(et)
+                    if et_key in mf_dict and total_len > 0:
+                        l = max(0, int(onset))
+                        r = min(total_len, int(offset))
+                        if r < l:
+                            l, r = r, l
+                        mf_dict[et_key][l:r] = 1
+                # Also fill spans from current onsets/event_offsets to ensure new types are present
+                try:
+                    if total_len > 0 and hasattr(self, 'onsets') and hasattr(self.timeline_canvas, 'event_offsets'):
+                        for onset in (self.onsets or []):
+                            et = str(self.onset_types.get(onset, ''))
+                            if et and et in mf_dict:
+                                # event_offsets stores inclusive end; convert to exclusive for slicing
+                                off_incl = int(self.timeline_canvas.event_offsets.get(onset, onset))
+                                off = off_incl + 1
+                                l = max(0, int(onset))
+                                r = min(total_len, int(off))
+                                if r < l:
+                                    l, r = r, l
+                                mf_dict[et][l:r] = 1
+                except Exception:
+                    pass
+                df_mf = pd.DataFrame(mf_dict)
+                mf_csv_path = os.path.join(output_dir, f"{base_name}_framewise.csv")
+                df_mf.to_csv(mf_csv_path, index=False)
+            except Exception:
+                pass
             # Create comparison plot and save it in output directory
             plot_path = os.path.join(output_dir, f"{base_name}_comparison_plot.png")
             self.create_validation_comparison_plot(export_events, save_path=plot_path)
@@ -3840,6 +4429,7 @@ Average Score: {avg_score:.3f}
                 f"• {base_name}.xlsx (Excel data)\n"
                 f"• {base_name}.npy (NumPy data)\n"
                 f"• {base_name}_metrics.json (Performance metrics)\n"
+                f"• {base_name}_framewise.csv (Per-frame binary masks)\n"
                 f"• {base_name}_comparison_plot.png (Comparison plot)\n\n"
                 f"Directory: {output_dir}")
             
@@ -3857,34 +4447,110 @@ Average Score: {avg_score:.3f}
         
         # Calculate statistics
         accepted_count = sum(1 for event in export_events if event[3] == 'accepted')
+        lightly_edited_count = sum(1 for event in export_events if event[3] == 'lightly edited')
         edited_count = sum(1 for event in export_events if event[3] == 'edited')
         rejected_count = sum(1 for event in export_events if event[3] == 'rejected')
         manually_added_count = sum(1 for event in export_events if event[3] == 'manually added')
         pending_count = sum(1 for event in export_events if event[3] == 'pending')
         
         total_events = len(export_events)
-        true_positives = accepted_count + edited_count  # Accepted + Edited
+        true_positives = accepted_count + lightly_edited_count + edited_count  # Accepted + Lightly Edited + Edited
         false_positives = rejected_count  # Rejected
         
-        # Check if motion_energy exists
-        if self.motion_energy is None:
-            QMessageBox.warning(self, "Warning", "No motion energy data available for comparison plot")
-            return
+        # Ensure we have a motion energy trace to plot (synthesize if missing)
+        import numpy as np
+        if getattr(self, 'motion_energy', None) is None or len(self.motion_energy) == 0:
+            try:
+                max_off = 0
+                for _, offset, *_ in export_events:
+                    max_off = max(max_off, int(offset))
+                length = max_off if max_off > 0 else 1000
+                self.motion_energy = np.zeros(length, dtype=float)
+            except Exception:
+                self.motion_energy = np.zeros(1000, dtype=float)
             
         # Create the comparison plot
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 5.5), gridspec_kw={'height_ratios': [0.38, 0.38]})
         plt.subplots_adjust(top=0.85)
         
-        # Top subplot: Original classification (all events as accepted)
+        # Top subplot: Original classification
+        # If an original classification table exists, reconstruct spans per type dynamically.
         ax1.plot(np.arange(len(self.motion_energy)), self.motion_energy, color='blue', linewidth=1, alpha=0.7)
-        
-        # Plot all original events as accepted (purple for twitch, yellow for active)
-        for event in export_events:
-            onset, offset, event_type, status, score = event
-            if event_type == 'twitch':
-                ax1.axvspan(onset, offset, color='purple', alpha=0.6)
-            elif event_type == 'active':
-                ax1.axvspan(onset, offset, color='yellow', alpha=0.6)
+        used_original = False
+        try:
+            import pandas as pd
+            if hasattr(self, 'input_classification_df') and self.input_classification_df is not None and isinstance(self.input_classification_df, pd.DataFrame):
+                df0 = self.input_classification_df
+                ignore_cols = {'motion_energy', 'status', 'score', 'frame_idx'}
+                # Detect binary event columns as original classes
+                candidate_cols = []
+                for c in df0.columns:
+                    if c in ignore_cols:
+                        continue
+                    if not pd.api.types.is_numeric_dtype(df0[c]):
+                        continue
+                    series = pd.to_numeric(df0[c], errors='coerce').fillna(0).round(0).astype(int)
+                    if series.isin([0, 1]).all() and series.any():
+                        candidate_cols.append(c)
+                if candidate_cols:
+                    color_map0 = getattr(self, 'event_type_colors', {}) or {}
+                    import numpy as np
+                    for col in candidate_cols:
+                        et = str(col)
+                        ck = et.lower()
+                        cv = color_map0.get(ck, color_map0.get(et, None))
+                        if cv is None:
+                            if ck == 'twitch':
+                                cv = 'purple'
+                            elif ck == 'active':
+                                cv = 'yellow'
+                            else:
+                                cv = '#888888'
+                        series = pd.to_numeric(df0[col], errors='coerce').fillna(0).round(0).astype(int).values
+                        # Find contiguous spans of 1s
+                        if series.size:
+                            padded = np.pad(series, (1, 1), constant_values=0)
+                            diff = np.diff(padded)
+                            starts = np.where(diff == 1)[0]
+                            ends = np.where(diff == -1)[0]
+                            for s, e in zip(starts, ends):
+                                # s inclusive, e exclusive; use e-1 as inclusive offset
+                                ax1.axvspan(int(s), int(e - 1), color=cv, alpha=0.6)
+                    used_original = True
+        except Exception:
+            used_original = False
+
+        # Fallback: plot all current events as accepted if no original table
+        if not used_original:
+            for onset, offset, event_type, status, score in export_events:
+                # Sanitize
+                try:
+                    onset_i = int(onset)
+                    offset_i = int(offset)
+                except Exception:
+                    continue
+                if offset_i < onset_i:
+                    onset_i, offset_i = offset_i, onset_i
+                onset_i = max(0, onset_i)
+                offset_i = max(0, offset_i)
+                max_idx = max(0, len(self.motion_energy) - 1)
+                onset_i = min(onset_i, max_idx)
+                offset_i = min(offset_i, max_idx)
+                color_key = str(event_type).lower() if event_type is not None else ''
+                # Resolve color from mapping with fallbacks
+                color_map = getattr(self, 'event_type_colors', {}) or {}
+                color_val = color_map.get(color_key, color_map.get(event_type, None))
+                if color_val is None:
+                    if color_key == 'twitch':
+                        color_val = 'purple'
+                    elif color_key == 'active':
+                        color_val = 'yellow'
+                    else:
+                        color_val = '#888888'
+                try:
+                    ax1.axvspan(onset_i, offset_i, color=color_val, alpha=0.6)
+                except Exception:
+                    pass
         
         ax1.set_title('Original Motion Energy Classification (All Events)', fontsize=14, fontweight='bold')
         ax1.set_ylabel('Motion Energy', fontsize=12)
@@ -3900,12 +4566,12 @@ Average Score: {avg_score:.3f}
         # Bottom subplot: Validated classification (with validation markers)
         ax2.plot(np.arange(len(self.motion_energy)), self.motion_energy, color='blue', linewidth=1, alpha=0.7)
         
-        # Plot events with validation status
-        for event in export_events:
-            onset, offset, event_type, status, score = event
-            
-            # Set alpha based on validation status
+        # Plot events with validation status, in chosen colors
+        for onset, offset, event_type, status, score in export_events:
+            # Alpha by validation status
             if status == 'accepted':
+                alpha = 1.0
+            elif status == 'lightly edited':
                 alpha = 1.0
             elif status == 'edited':
                 alpha = 0.8
@@ -3913,21 +4579,54 @@ Average Score: {avg_score:.3f}
                 alpha = 0.3
             elif status == 'manually added':
                 alpha = 0.5
-            else:  # pending
+            else:
                 alpha = 0.4
-                
-            if event_type == 'twitch':
-                ax2.axvspan(onset, offset, color='purple', alpha=alpha)
-            elif event_type == 'active':
-                ax2.axvspan(onset, offset, color='yellow', alpha=alpha)
+            # Sanitize
+            try:
+                onset_i = int(onset)
+                offset_i = int(offset)
+            except Exception:
+                continue
+            if offset_i < onset_i:
+                onset_i, offset_i = offset_i, onset_i
+            onset_i = max(0, onset_i)
+            offset_i = max(0, offset_i)
+            max_idx = max(0, len(self.motion_energy) - 1)
+            onset_i = min(onset_i, max_idx)
+            offset_i = min(offset_i, max_idx)
+            color_key = str(event_type).lower() if event_type is not None else ''
+            color_map = getattr(self, 'event_type_colors', {}) or {}
+            color_val = color_map.get(color_key, color_map.get(event_type, None))
+            if color_val is None:
+                if color_key == 'twitch':
+                    color_val = 'purple'
+                elif color_key == 'active':
+                    color_val = 'yellow'
+                else:
+                    color_val = '#888888'
+            try:
+                ax2.axvspan(onset_i, offset_i, color=color_val, alpha=alpha)
+            except Exception:
+                pass
         
         # Add validation markers with same logic as timeline
         for event in export_events:
             onset, offset, event_type, status, score = event
             if status == 'accepted':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
+                try:
+                    ax2.plot(int(onset), max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
+                except Exception:
+                    pass
+            elif status == 'lightly edited':
+                try:
+                    ax2.plot(int(onset), max(self.motion_energy) * 1.05, 'o', color='#81C784', markersize=6)  # Light green
+                except Exception:
+                    pass
             elif status == 'rejected':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
+                try:
+                    ax2.plot(int(onset), max(self.motion_energy) * 1.05, 'o', color='red', markersize=6)
+                except Exception:
+                    pass
             elif status == 'edited':
                 # Use same logic as timeline for edited events
                 if hasattr(self, 'event_status') and onset in self.event_status:
@@ -3941,9 +4640,16 @@ Average Score: {avg_score:.3f}
                     color = 'orange'
                 else:
                     color = 'orange'  # Fallback
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
+                try:
+                    ax2.plot(int(onset), max(self.motion_energy) * 1.05, 'o', color=color, markersize=6)
+                except Exception:
+                    pass
             elif status == 'manually added':
-                ax2.plot(onset, max(self.motion_energy) * 1.05, 'o', color='blue', markersize=6)
+                # Match legend color for manual
+                try:
+                    ax2.plot(int(onset), max(self.motion_energy) * 1.05, 'o', color='#00CED1', markersize=6)
+                except Exception:
+                    pass
         
         ax2.set_title('Validated Motion Energy Classification', fontsize=14, fontweight='bold')
         ax2.set_xlabel('Frame', fontsize=12)
@@ -3957,16 +4663,33 @@ Average Score: {avg_score:.3f}
         except Exception:
             pass
         
-        # Add legend
-        legend_elements = [
-            Line2D([0], [0], color='purple', alpha=0.6, linewidth=10, label='Twitch'),
-            Line2D([0], [0], color='yellow', alpha=0.6, linewidth=10, label='Active'),
+        # Add legend (dynamic event types + markers)
+        legend_elements = []
+        color_map = getattr(self, 'event_type_colors', {}) or {}
+        seen_types = []
+        for _, _, event_type, _, _ in export_events:
+            key = '' if event_type is None else str(event_type)
+            if key in seen_types:
+                continue
+            seen_types.append(key)
+            ck = key.lower()
+            cv = color_map.get(ck, color_map.get(key, None))
+            if cv is None:
+                if ck == 'twitch':
+                    cv = 'purple'
+                elif ck == 'active':
+                    cv = 'yellow'
+                else:
+                    cv = '#888888'
+            legend_elements.append(Line2D([0], [0], color=cv, alpha=0.6, linewidth=10, label=key.capitalize()))
+        # Validation marker legend
+        legend_elements.extend([
             Line2D([0], [0], marker='o', color='green', markersize=8, label='Accepted', linestyle=''),
+            Line2D([0], [0], marker='o', color='#81C784', markersize=8, label='Lightly Edited', linestyle=''),
+            Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited', linestyle=''),
             Line2D([0], [0], marker='o', color='red', markersize=8, label='Rejected', linestyle=''),
-            Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited (orange)', linestyle=''),
-            Line2D([0], [0], marker='o', color='green', markersize=8, label='Edited (green)', linestyle=''),
             Line2D([0], [0], marker='o', color='#00CED1', markersize=8, label='Manually Added', linestyle='')
-        ]
+        ])
         fig.legend(handles=legend_elements, bbox_to_anchor=(0.01, 0.99), loc='upper left', ncol=1, fontsize=11, borderaxespad=0.)
         
         plt.tight_layout()
@@ -3975,11 +4698,12 @@ Average Score: {avg_score:.3f}
         stats_text = (
             f"Validation: Total Events: {total_events}, "
             f"Accepted: {accepted_count} ({accepted_count/total_events*100:.1f}%), "
+            f"Lightly Edited: {lightly_edited_count} ({lightly_edited_count/total_events*100:.1f}%), "
             f"Edited: {edited_count} ({edited_count/total_events*100:.1f}%), "
             f"Rejected: {rejected_count} ({rejected_count/total_events*100:.1f}%), "
             f"Manually Added: {manually_added_count} ({manually_added_count/total_events*100:.1f}%), "
             f"Pending: {pending_count} ({pending_count/total_events*100:.1f}%)\n"
-            f"Performance: True Positives (Accepted+Edited): {true_positives} ({true_positives/total_events*100:.1f}%), "
+            f"Performance: True Positives (Accepted+Lightly Edited+Edited): {true_positives} ({true_positives/total_events*100:.1f}%), "
             f"False Positives (Rejected): {false_positives} ({false_positives/total_events*100:.1f}%), "
             f"Precision: {true_positives/(true_positives+false_positives)*100:.1f}% (if no pending/manually added)"
         )
@@ -3989,11 +4713,44 @@ Average Score: {avg_score:.3f}
         
         # Save the plot if save_path is provided
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            try:
+                import os
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                fig.savefig(save_path, dpi=150, bbox_inches='tight')
+            except Exception:
+                pass
         
         plt.show()
             
     # Removed save_performance_metrics() - functionality merged into save_and_export_validation()
+
+    def crop_video_to_classification_range(self, start_frame, end_frame):
+        """Crop video to match the classification frame range."""
+        try:
+            # Store original video info for reference
+            if not hasattr(self, 'original_video_range'):
+                self.original_video_range = (0, self.total_frames)
+            
+            # Update video frame range
+            self.video_start_frame = start_frame
+            self.video_end_frame = end_frame
+            self.total_frames = end_frame - start_frame
+            
+            # Update UI elements
+            self.frame_slider.setMaximum(max(0, self.total_frames - 1))
+            self.onset_spinbox.setMaximum(max(0, self.total_frames - 1))
+            self.offset_spinbox.setMaximum(max(0, self.total_frames - 1))
+            
+            # Reset current frame to be within the new range
+            self.current_frame = min(self.current_frame, self.total_frames - 1)
+            self.frame_slider.setValue(self.current_frame)
+            
+            # Update total frames label
+            self.total_frames_label.setText(str(self.total_frames))
+            
+            print(f"Video cropped: new range {start_frame}-{end_frame}, total frames: {self.total_frames}")
+        except Exception as e:
+            print(f"Warning: Failed to crop video to classification range: {e}")
 
     def load_framewise_table(self, fname):
         import pandas as pd
@@ -4622,15 +5379,16 @@ Average Score: {avg_score:.3f}
         import pandas as pd
         # Crée le DataFrame de base
         n_frames = len(self.motion_energy) if self.motion_energy is not None else 0
-        df = pd.DataFrame({
+        dynamic_types = sorted({str(t).lower() for t in getattr(self, 'available_event_types', [])} | {str(t).lower() for t in getattr(self, 'onset_types', {}).values() if t})
+        base_cols = {
             'frame_idx': range(n_frames),
             'motion_energy': self.motion_energy if self.motion_energy is not None else [],
-            'active': [0]*n_frames,
-            'twitch': [0]*n_frames,
-            'complex': [0]*n_frames,
             'status': ['']*n_frames,
             'score': [0]*n_frames
-        })
+        }
+        for t in dynamic_types:
+            base_cols[t] = [0]*n_frames
+        df = pd.DataFrame(base_cols)
         # Remplit les colonnes par événement validé
         for onset in self.onsets:
             offset = self.timeline_canvas.event_offsets.get(onset, onset)
@@ -4641,6 +5399,8 @@ Average Score: {avg_score:.3f}
                 score = 1
             elif status == 'rejected':
                 score = -1
+            elif status == 'lightly edited':
+                score = 1
             elif status == 'edited':
                 score = 0.5
             elif status == 'manually added':
@@ -4648,7 +5408,7 @@ Average Score: {avg_score:.3f}
             else:
                 score = 0
             # Remplit la colonne binaire de onset à offset inclus
-            if event_type in ('active', 'twitch', 'complex'):
+            if event_type in df.columns:
                 df.loc[onset:offset, event_type] = 1
             # Remplit status et score à l'onset
             df.at[onset, 'status'] = status
@@ -4713,8 +5473,8 @@ Average Score: {avg_score:.3f}
         suffix = '_pending' if has_pending else '_final'
         mf_df = input_df.copy()
         n_frames = len(mf_df)
-        for col in ['active', 'twitch']:
-            # if col not in mf_df.columns:
+        dynamic_types = sorted({str(t).lower() for t in getattr(self, 'available_event_types', [])} | {str(t).lower() for t in getattr(self, 'onset_types', {}).values() if t})
+        for col in dynamic_types:
             mf_df[col] = 0
         mf_df['status'] = [''] * n_frames
         mf_df['score'] = [''] * n_frames
@@ -4727,7 +5487,7 @@ Average Score: {avg_score:.3f}
             end = max(onset, self.timeline_canvas.event_offsets.get(onset, onset))
             # For export: make offset inclusive; ensure at least one-frame span
             export_offset = end + 1 if end > start else (start + 1)
-            if event_type in ['active', 'twitch']:
+            if event_type in dynamic_types:
                 mf_df.loc[start:end, event_type] = 1
             # Write status and score only at the onset frame
             if manual_only_export:
@@ -4739,6 +5499,9 @@ Average Score: {avg_score:.3f}
             elif status == 'rejected':
                 score = -1
                 status_label = 'rejected'
+            elif status == 'lightly edited':
+                score = 1
+                status_label = 'lightly edited'
             elif status == 'edited':
                 if self.event_status.get(onset, 0.5) == 1:
                     score = 1
@@ -4796,6 +5559,8 @@ Average Score: {avg_score:.3f}
                 score = 1
             elif status == 'rejected':
                 score = -1
+            elif status == 'lightly edited':
+                score = 1
             elif status == 'edited':
                 score = 0.5
             elif status == 'manually added':
@@ -4887,7 +5652,8 @@ Average Score: {avg_score:.3f}
             try:
                 import pandas as pd
                 mf2_df = pd.DataFrame({'frame_idx': list(range(n_frames2))})
-                for col in ['active', 'twitch']:
+                dynamic_types2 = sorted({str(t).lower() for t in getattr(self, 'available_event_types', [])} | {str(t).lower() for t in getattr(self, 'onset_types2', {}).values() if t})
+                for col in dynamic_types2:
                     mf2_df[col] = 0
                 mf2_df['status'] = [''] * n_frames2
                 mf2_df['score'] = [''] * n_frames2
@@ -4898,7 +5664,7 @@ Average Score: {avg_score:.3f}
                     start2 = min(onset, off2)
                     end2 = max(onset, off2)
                     export_off2 = end2 + 1 if end2 > start2 else (start2 + 1)
-                    if event_type2 in ['active', 'twitch', 'complex']:
+                    if event_type2 in dynamic_types2:
                         mf2_df.loc[start2:end2, event_type2] = 1
                     mf2_df.at[onset, 'status'] = 'manually added'
                     mf2_df.at[onset, 'score'] = 0
@@ -5213,7 +5979,7 @@ Average Score: {avg_score:.3f}
         self.update_onset_info()
 
     def create_validation_pie_chart(self, export_events, save_path=None):
-        """Create and save a pie chart showing the percentage of accepted, edited (<X, >X), pending, rejected, and manually added events."""
+        """Create and save a pie chart showing the percentage of accepted, lightly edited, edited, pending, rejected, and manually added events."""
         import matplotlib.pyplot as plt
         from collections import Counter
         edit_threshold = getattr(self, 'edit_threshold', 5)
@@ -5221,7 +5987,12 @@ Average Score: {avg_score:.3f}
         for event in export_events:
             status = event[3]
             if status == 'edited':
-                status_buckets.append('edited')
+                # Check if this is a lightly edited event (score = 1)
+                score = event[4] if len(event) > 4 else 0.5
+                if score == 1:
+                    status_buckets.append('lightly edited')
+                else:
+                    status_buckets.append('edited')
             else:
                 status_buckets.append(status)
         counter = Counter(status_buckets)
@@ -5230,14 +6001,15 @@ Average Score: {avg_score:.3f}
         colors = []
         color_map = {
             'accepted': '#4CAF50',      # Green
+            'lightly edited': '#81C784', # Light green
             'edited': '#FFA726',        # Orange
             'pending': '#90A4AE',       # Gray-blue
             'rejected': '#F44336',      # Red
             'manually added': '#00CED1' # Cyan
         }
-        for status in ['accepted', 'edited', 'pending', 'rejected', 'manually added']:
+        for status in ['accepted', 'lightly edited', 'edited', 'pending', 'rejected', 'manually added']:
             if counter[status] > 0:
-                labels.append(f"{status.capitalize()} ({counter[status]})")
+                labels.append(f"{status.replace(' ', ' ').title()} ({counter[status]})")
                 sizes.append(counter[status])
                 colors.append(color_map.get(status, '#BDBDBD'))
         if not sizes:

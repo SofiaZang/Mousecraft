@@ -1,54 +1,57 @@
 # Mousecraft                                                     <img width="360" height="328" alt="image" src="https://github.com/user-attachments/assets/85e1e2fc-9308-42e5-8c03-8616f15092d6" />
-                                                                                                                                                                                                                                       
-A human & mouse-friendly GUI used for validating or creating behavior annotations.
+                                                                                                                                                                                                                                         
+A fun GUI used for classifying and validating behavior annotations.
 
 ## Features
 
-- Load video(s) and motion signal or annotation outputs
-- Validate, edit, and add motion events
+- Load video and motion signal (eg. motion energy, eye motion) or classification labels (gui labels)
+- Move from onset to onset and accept/reject, edit, or add motion events
 - Export results in multiple formats (.npy, .csv) & plot some performance statistics 
 
 ## Installation
 
 ### Using Conda (Recommended)
 
-For local installation (tried in Windows, to be tried in other os's) 
+For local installation (tried in Windows, to be tried in other OS)
 
-1. Install Anaconda (https://www.anaconda.com/download) or Miniconda &  install also: GitBash (https://git-scm.com/downloads).
-Tip: If Anaconda/Miniconda gives issues, try installing Miniforge and do the procedure there.
+1. Install an Anaconda distribution of Python or miniconda (miniforge, if anaconda wont work try via miniforge) & GitBash 
+
+2.  Open an anaconda prompt / command prompt with conda for python 3 in the path.
+Navigate where you want the MouseCraft files to live. For example: cd Documents
+
+3. Once under code folder do  ```git clone https://github.com/SofiaZang/Mousecraft.git``` mousecraft repository. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git.
+If this does not work, do the git clone (step 2: navigate to desired folder and step : clone the repository) in GitBash. 
+
+4. Once cloned in the anaconda prompt, do ``cd Mousecraft`` to go into the root folder of MouseCraft GUI.
    
-2.  Open an git bash and navigate to the folder where you want Mousecraft to be installed.
+5. Then create a new environment with ``conda env create -f environment.yml`` . In case creating this environment takes too long, try ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``. Else, try creating the envirnonment via miniconda.
   
-3. Clone the mousecraft repository to your computer pasting: ```git clone https://github.com/SofiaZang/Mousecraft.git```. You can also get the cloning link under green code button here https://github.com/SofiaZang/Mousecraft.git
+6. Activate the MouseCraft environment ``conda activate mousecraft`` . 
    
-4. Open an anaconda prompt and navigate to the cloned root folder of the MouseCraft GUI ``cd Mousecraft``. 
+7. Once activated do: ``pip install -e .`` 
+This installs mousecraft codes to your local repository!
 
-5. Create the MouseCraft envirnoment with ``conda env create -f environment.yml``
-   
-If this is slow, try: ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``
-  
-6. Activate MouseCraft environment with ``conda activate mousecraft`` . 
-   
-7. Then do: ``pip install -e .`` 
-This installs mousecraft package to your local repository!
+8. Now run ``python -m mousecraft`` and you're all set. The GUI should open! You have two options Play or Exit buttons - tip: Choose Play to open the GUI! 
 
-8. Open the GUI: Run ``python -m mousecraft`` and you're all set! 
-
-### Using pip only
+### Using pip only (alternative installation)
 
 Another way to install the mousecraft package via pip is:
 
-1. ``pip install git+https://github.com/SofiaZang/Mousecraft.git`` after navigateing to the directory where you want the MouseCraft to be installed in.
-   
-### After Installation:
-Everytime you want to use Mousecraft, you have to first run ``conda activate mousecraft`` and then: ``mousecraft`` or ``python -m mousecraft`` 
+``pip install git+https://github.com/SofiaZang/Mousecraft.git`` in the same directory where you want the mousecraft repository to live in.
+
+### General
+
+Everytime you want to use Mousecraft, you have to first run ``conda activate mousecraft``, navigate to the mousecraft folder and inside Mousecraft folder and then: ``python -m mousecraft`` 
+
+<img width="657" height="200" alt="image" src="https://github.com/user-attachments/assets/0ed43675-a008-4779-87cf-d181f9af7360" />
+
+Then the GUI opens! 
 
 <img width="1357" height="987" alt="mousecraft_starter" src="https://github.com/user-attachments/assets/456d843b-7a18-4dda-8eae-03704c6cb3cc" />
 
 Friendly tip #2: Do not attempt to exit, it won't work :) 
 
 <img width="1912" height="993" alt="image" src="https://github.com/user-attachments/assets/d0daebf8-7641-4566-a66d-78084d17992c" />
-c:\Users\zaggila\Desktop\Mousecraft_GUI_main.PNG
 
 ## Dependencies
 
@@ -86,40 +89,56 @@ dependencies:
       - statsmodels
 
 
+### How to use MouseCraft:
+
 ## Inputs
 
-Mousecraft accepts any .npy file (or .json) of the motion signal you have eg. motion_energy.npy (or motion_energy.json) or if you have run the automatic classification notebook then the annotation labels saved as gui_lables.csv or .xlsx under the folder 'mouse_motion_average' under the dataset folder you analysed. This file will also contain the motion signal value for each frame of the recording so will automatically load and display both motion signal and proposed annotations. If you have used another method to classify your signal, you can still load your proposed annotations as long as they follow the same matrxi structure with columns: 'frame_idx, signal, event_type 1, event_type 2, event_type 3, .. event_type_n'
+**Annotate and Validate in the GUI:
 
-<img width="730" height="327" alt="image" src="https://github.com/user-attachments/assets/8581b1f9-45bb-478c-b755-9ef1b168ac83" />
+Mousecraft accepts any '.npy"' file of the motion signal you have computed for example 'motion_energy.npy' or 'eye_motion.npy' or the behavioral video you want to annotate. Once you load your signal you can click on 'Compute classification" button to launch the annotation.
 
-<img width="279" height="118" alt="image" src="https://github.com/user-attachments/assets/ccd656b2-f914-4919-b33a-12522b038588" />
+See here: 
 
-You also need to load a movie in one of the following .avi, .mp4, .mkv, .mov, .tiff formats (tip: downsample the movie or compress before loading, else may be too heavy and crash)
+<img width="722" height="580" alt="image" src="https://github.com/user-attachments/assets/ea4eb917-f058-4307-89ee-abae05492681" />
 
-See examples of the classification algorithm mousecraft uses in this notebook https://colab.research.google.com/drive/1Sfts_onqzadvvcDXfVnDBEA_10ic7_YI?usp=sharing
+You can choose to adjust the thresholds according to your usecase. Generally the annotation will first binarise the signal into 0-1 or Rest-Arousal states (recommended threshold: Otsu) and in a second step detect smaller events embedded within the 0 or Rest period (twitches or complex other movements) that can be interpreted according to your usecase. For example, if your signal is eye motion then the small fast transient changes in motion could be sleep-related fast eey movements. This will work best for clean signals where arousal interchanges with low-motion.
 
-Tips: For the notebook to run you need the motion_energy.npy (or other motion_signal.npy) or the .tiff file of the behavior you want to annotate if you have not computed the motion energy and it will be automatically computed in the notebook run.
+Last, load your behavioral video recording in .avi or .mp4. Now you can inspect video and annotations in synch and validate accordingly.
+
+**Annotate in the notebook and load in the GUI for validation-only:
+
+Else, you can independently run the 'motion_classifier.ipynb' notebook and load the 'mousecraft_auto_labels.xlsx' file that the notebook saves under the folder'mouse_motion_average'. This file will loads and displays both motion signal and proposed annotations so you don't need to 'Compute classification' in the GUI.
+
+The notebook will look for the following configuration:
+
+-dataset_id
+  - camera_processed
+    - 'motion_energy.npy'
+
+If you did not compute motion_energy yet, you can do so within the notebook by setting the 'movie_path' variable to your behavioral video (.tiff). 
+
+-dataset_id
+  - camera_processed
+  - mouse_video.tif 
 
 ## Using the GUI
 
-<img width="1130" height="379" alt="image" src="https://github.com/user-attachments/assets/2e8a90bc-dff4-409f-a51f-37182ad4e677" />
-
 The interface is divided into two main panels:
 
-Left Panel: Video playback and control
-Right Panel: Motion energy timeline, event navigation, and annotation tools
+Left Panel: Video playback and controls
+Right Panel: motion signal annotation timeseries, event navigation, and validation tools
 
 ### Video Display & Controls (Left Panel)
-
-#### Video Display
-Main video window: Displays the loaded video of the mouse behavior. 
-Shows frame-by-frame playback and updates when navigating events.
 
 #### Load Video
 
 Button: Load Video and Add a Camera
 Opens a file dialog to select a video file (.avi, .mp4, .mov, .tiff, etc.).
 You can load a second video and adjust both size. 
+
+#### Video Display
+
+Main video window: Displays the loaded video of the mouse behavior. Shows frame-by-frame playback and updates in real-time while navigating events.
 
 #### Playback Controls
 
@@ -131,40 +150,45 @@ Stop ⏹: Stops playback and resets to frame 0.
 Textbox (FPS): Defines frames per second for playback speed (e.g., enter 5 for 5 fps). By default the movie will play at 1 fps.
 
 #### Frame Slider
-Allows manual scrubbing through frames of the loaded video. You can also just write the frame you want to check and you will be teleported there.
+
+Allows manual scrubbing through frames of the loaded video. You can also just enter the index of the frame you want to inspect and you will teleport there.
 
 ### Onset Status and Performance Metrics
 
 #### Onset Status
-Displays whether the current frame corresponds to an annotated onset (e.g., Active/Twitch).
+
+Informs whether the current frame corresponds to an annotated onset (e.g., Active or Twitch onset).
 
 #### Performance Score
-Text box displaying annotation statistics. Accepted = 1, Rejected = -1, Edited = 0.5, Pending = 0, Manually-added = 0. 
-This can be adjusted (in the main gui code).
+
+Text box displaying annotation statistics. Accepted = 1, Rejected = -1, Edited = 0.5, Pending = 0, Manually-added = 0. The more you reject, you penalise the score and the more you accept you boost it. This is just to keep track of correct guesses of the annotation and potentially adapt it.
 
 ### Save & Export
 
 #### Export Folder
-Field + Button (...): Choose where to save annotations and outputs.
 
-Mousecraft also saves automatically every 20 min if you have performed at least one action within these 20 min. First autosave asks you for the output path and then  its set for the following saves. If you close mousecraft before having finished the validation, you will see the curernt progress saved as _pending files. Once you complete and no pending events remain, the output files will overwrite any pending ones and be saved as _final.
+Field + Button (...): Choose where to save annotations and GUI outputs.
 
-Tip: In case you have made some mistake and an event overlaps with another, an error message appears before save.
+Mousecraft auto-saves your progress every 20 min if you have performed at least one action within these 20 min. First autosave asks you for the output path and then its set for the following saves. If you close mousecraft before having finished the validation, you will not lose current progress as it is saved with prefix '_pending'. To continue from where you left off when you relaunch the GUI just load the validation_MF_pending file (see below in Outputs section).
+Once you complete and no pending events remain, the output files will overwrite any pending ones and be saved with prefix '_final'.
 
 ### Motion Energy Timeline (Right Panel)
 
 #### Timeline Plot
-Displays the motion energy trace over frames.
+
+Displays the motion trace over time.
 
 #### Load An Input
-Loads a precomputed motion energy file (.csv, .xlsx, .npy, .json) or a classification (Active/Twitch events) for review and editing.
+
+Loads a precomputed motion energy file (.csv, .xlsx, .npy) or a classification ('mousecraft_auto_labels.xlsx') for review and editing.
 Annotated events appear as colored spans: Yellow: Active events, Purple: Twitch events, Green/Red/Orange dots: Validation status (Accepted, Rejected, Edited).
 
 #### Add A Second Input
 
-Do the same as Load An Input. The second input appears under the first one. 
+Do the same as Load An Input. The second input appears under the first one. For example, you may want to load whole body movie and only eye close up movie as a second input and run the classification independently on both.
 
 #### Zoom Controls
+
 🔍+ / 🔍-: Zoom in and out of the timeline.
 Reset Zoom: Resets timeline view to full length.
 
@@ -193,28 +217,33 @@ Change Type: Changes an event’s type (e.g., Twitch → Active).
 ### Manual Event Addition
 
 #### Event Type:
-Dropdown to choose event type (Twitch, Active, Complex) for manual annotation.
 
-#### Add a Type : 
-Open a window. You can name the type and choose a color for this type. This tape will appears in every dropdown menu (event type of manual edition and onset navigation). 
+Dropdown to choose event type (by default Twitch, Active, Complex) for manual annotation.
+
+Tip: In case you have made some mistake and an event overlaps with another, an error message appears before save.
+
+#### Add a Type: 
+If the type of motion you want to annotate is different than the default options, you can add the movement type of interest.
+You can name the type and choose a color for it. This tape will now appear in every dropdown menu (event type of manual edition and onset navigation). 
 
 #### Onset / Offset Frame
+
 Spinboxes to manually enter frame numbers for onset and offset of new events.
 
 #### Set Current Frame
+
 Buttons to set the current video frame as onset or offset.
 
 #### Add Event
-Adds the new event to the annotation timeline. If the added or edited event overlaps fully with another event, the automatic event will be rejected and this new addition kept.
+
+Adds the new event to the annotation timeline. If the added or edited event overlaps fully with another event, the automatic event will be rejected and this new addition will be saved.
 
 #### Edit Threshold (frames)
-This matters for accuracy tracking. Sets the frame tolerance used when classifying edited events (e.g., 5 means ±5 frames from original is considered “minor edit” the status is edited but the dot is Green and the score is +1). This can be adjusted per user. (If for example the signal is averaged 5 times, we keep the tolerance at 5 frames).
+This matters for accuracy tracking. Sets the frame tolerance used when classifying edited events (e.g., 5 means ±5 frames from original is considered “minor edit” the event status in the output file is edited but the dot is Green and the score is +1). This can be adjusted per user if you are interested to evaluate the automatic annotation's performance. (If for example the signal is averaged 5 times, we keep the tolerance at 5 frames).
 
 ## Mousecraft outputs
 
 ### Main outputs:
-
-<img width="730" height="327" alt="image" src="https://github.com/user-attachments/assets/eb89236a-7453-4f5e-a3dd-8c4bf1db6041" />
 
 Mousecraft currently outputs 2 main outputs in .npy and .csv format:
 
@@ -226,15 +255,16 @@ Mousecraft currently outputs 2 main outputs in .npy and .csv format:
 
 <img width="613" height="509" alt="image" src="https://github.com/user-attachments/assets/dac8431f-fa92-4e61-855c-a574f600e2db" />
 
-Same information but each line is a frame (in same format as input .csv) and this is the input when you continue validation from _pending.
+Same information but each line is a frame (in same format as input .csv) and this is the input you can reload when you continue validating from _pending.
 
 #### Other outputs:
+
+<img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
 
 and also 2 .pngs and .json that showcase the overall performance of mousecraft validation
 
 <img width="1359" height="1011" alt="validation_status_pie_final" src="https://github.com/user-attachments/assets/c936c207-6bcf-4b6c-a2ae-f25b42b73d14" />
 <img width="4472" height="1676" alt="validation_comparison_plot_final" src="https://github.com/user-attachments/assets/6ead7ed5-d7c9-4074-a92d-6bbec33706d5" />
-<img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
 
 ## License
 

@@ -1,55 +1,105 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# # State detection pipeline on motion energy 
+# 
+# Binarises motion (here is motion energy but we can do same with eye motion (from SLEAP) into prospective Active/Awake and Rest/Sleep state & performs twitch detection during Rest
+# 
+# Goal: 
+# 
+# - Export annotations and validate 
+# 
+# ## Validation:
+# 
+# *** If Manually: Go to excel file named automatic_annotation.xls (that lives in a folder named motion_annotation and open. There you can find onsets and offsets (in frames) for each motion (active, twitch, or unclassified (complex))
+# You can then add your validated frames on the validated columns. 
+# 
+# - Bonus: Once this is done, we can check how many motions and twitches are TP FP TN (TN we cant have).
+# 
+# *** If in GUI: then load the .avi movie as well as the 'behavior_events_{ds}.xls' (which contains the annotations in binary format) to the GUI. (We need to work on it - add and adjust functionalities)
+# 
+# Bonus2: get % of validated detection and curated onsets and offsets and twithces 
+# 
+# 
+# ## Once we validate: 
+# 
+# We can check several interesting things:
+# 
+# On the behavior: 
+# 
+# - How do twitches evolve across ages ? (in duraration, amplitude, frequency)
+# - How much time in awake - sleep we identify per age and how does it evolve ?
+# - If we track the eye (SLEAP) -> How much correlated the pupil signal is to the motion energy ? Can we identify eye specific motions ? (eg REM, or just twitches).
+# - If so what % of overlaping - unique eye motions do we find ?
+#   
+# On the relationship of behavior with neural activity:
+# 
+# * Once have the onsets - do PMTHs (single and avgs) for twitch and for awake motion
+# This requires the s2p non avged (rerun on server) 
+#   
+# - If detection on non avg - then match back the times /3 and closest ? check carmens ds for other analysis (correlations (motion coupling) vs population coupling, decoding etc.
+# 
+# reminder:
+# - check maybe sav golay for smoothing better ?  https://scipy-cookbook.readthedocs.io/items/SavitzkyGolay.html
+# Check onset and offset to be as smooth and not affected by smoothing & avging
+# 
+# - Check twitch bursts -> I think its the step it removes too many twithces
+
+# In[1]:
+
+
 import os
-import sys
-import json
 # going to root directory (if not there yet)
 current_dir = os.getcwd().split('/')[-1]
 if current_dir != 'pixelNMF': 
     os.chdir('..')
+
+
+# In[2]:
+
+
+os.getcwd()
+
+
+# In[3]:
+
+
+cd mousecraft
+
+
+# In[4]:
+
 
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import tifffile
 from skimage import filters
-from scipy.ndimage import label
+from scipy.ndimage import label, binary_closing
 from scipy.signal import savgol_filter
+from scipy.stats import skew, kurtosis
 from scipy.stats import gaussian_kde
 from scipy.signal import find_peaks
-from pathlib import Path
-# Optional dependency: Hartigan's Dip Test
-try:
-    from diptest import diptest
-except Exception:
-    diptest = None
-# Make sure local package 'patchnmf' (under mousecraft/) is importable
-try:
-    from patchnmf.data_io import *
-    from patchnmf.analyse.videography_compute import *
-    from patchnmf.analyse.videography_plot import *
-except ModuleNotFoundError:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, '..'))
-    mousecraft_dir = os.path.join(project_root, 'mousecraft')
-    if mousecraft_dir not in sys.path:
-        sys.path.insert(0, mousecraft_dir)
-    # Retry imports after adjusting sys.path
-    from patchnmf.data_io import *
-    from patchnmf.analyse.videography_compute import *
-    from patchnmf.analyse.videography_plot import *
+from diptest import diptest
 
-# Plot control: disable interactive windows if --no-plots
-NO_PLOTS = ('--no-plots' in sys.argv)
-if NO_PLOTS:
-    try:
-        import matplotlib
-        matplotlib.use('Agg')  # non-interactive backend
-        plt.ioff()
-        plt.show = lambda *args, **kwargs: None  # no blocking
-    except Exception:
-        pass
+from pathlib import Path
+from PIL import Image
+import imageio
+import cv2
+
+from patchnmf.data_io import *
+from patchnmf.analyse.videography_compute import *
+from patchnmf.analyse.videography_plot import *
+
+
+# In[5]:
+
+
+os.getcwd()
+
+
+# In[6]:
+
 
 # setting common plot params 
 from matplotlib import rcParams
@@ -60,121 +110,41 @@ rcParams['axes.spines.top'] = False
 rcParams['axes.spines.right'] = False
 rcParams['figure.autolayout'] = True
 
+
+# In[7]:
+
+
 def mkdir(path):
     if not os.path.exists(path): os.makedirs(path)
     return path
 
-# Default data path and dataset (can be overridden by external motion energy)
-data_path = r'C:\Users\zaggila\Documents\pixelNMF\data_proc\cells'
-ds = 'sz105\\2025_05_30_a'
 
-subject_path = os.path.join(data_path, ds)  # default subject path
+# In[8]:
+
+
+data_path = rf'D:\Users\Max\Documents\data_proc\sz\cells'
+# sessions = sorted([f for f in os.listdir(data_path) if f.endswith('_cell_control')])
+# print(f'All sessions: {sessions}')
+
+ds = 'sz085\\2024-04-26_a\\camera_processed'
+
+subject_path = os.path.join(data_path, ds) # choose one specifc ds 
 movie_path = os.path.join(subject_path, 'cam_crop.tif')
 
-# Optional: allow external motion energy path via CLI argument
-external_me_path = None
-# Optional method overrides via CLI (positional):
-# argv[1] = motion_energy.npy (optional)
-# argv[2] = binary method (one of: otsu, li, mean_sd)
-# argv[3] = twitch method (one of: li, mad, percentile_95, mean_3sd, otsu)
-binary_method = 'otsu'
-twitch_method = 'li'
-if len(sys.argv) > 1 and isinstance(sys.argv[1], str):
-    candidate = sys.argv[1]
-    if os.path.exists(candidate) and candidate.lower().endswith('.npy'):
-        external_me_path = os.path.abspath(candidate)
-        # If external motion energy provided, override subject/save dirs to that file's folder
-        subject_path = os.path.dirname(external_me_path)
-        movie_path = None  # not used in this mode
-    elif os.path.exists(candidate) and (candidate.lower().endswith(('.tif', '.tiff', '.avi', '.mp4', '.mov', '.mkv', '.m4v', '.mpg', '.mpeg', '.wmv', '.webm', '.flv'))):
-        # If video/TIFF file provided, use its directory as subject_path and file as movie_path
-        movie_path = os.path.abspath(candidate)
-        subject_path = os.path.dirname(movie_path)
-        print(f"Using video/TIFF file: {movie_path}")
-        print(f"Output directory: {subject_path}")
-    # If first arg is not a path, treat it as method (allow calling without ME path)
-    elif sys.argv[1].lower() in {'otsu','li','mean_sd'}:
-        binary_method = sys.argv[1].lower()
-if len(sys.argv) > 2:
-    arg2 = sys.argv[2].lower()
-    if arg2 in {'otsu','li','mean_sd'}:
-        binary_method = arg2
-    elif arg2 in {'mad','percentile_95','mean_3sd','li','otsu'}:
-        twitch_method = arg2
-if len(sys.argv) > 3:
-    arg3 = sys.argv[3].lower()
-    if arg3 in {'mad','percentile_95','mean_3sd','li','otsu'}:
-        twitch_method = arg3
 
-# Parse additional arguments with proper flag handling
-start_frame = None
-end_frame = None
-fps_override = None
-avg_factor = None
-no_plots = False
+# In[9]:
 
-i = 4
-while i < len(sys.argv):
-    arg = sys.argv[i]
-    if arg == '--start' and i + 1 < len(sys.argv):
-        start_frame = int(sys.argv[i + 1])
-        i += 2
-    elif arg == '--end' and i + 1 < len(sys.argv):
-        end_frame = int(sys.argv[i + 1])
-        i += 2
-    elif arg == '--fps' and i + 1 < len(sys.argv):
-        fps_override = float(sys.argv[i + 1])
-        i += 2
-    elif arg == '--avg' and i + 1 < len(sys.argv):
-        avg_factor = int(sys.argv[i + 1])
-        i += 2
-    elif arg == '--no-plots':
-        no_plots = True
-        i += 1
-    else:
-        i += 1  # skip unknown argument
 
 # set parameters 
 gaussian_sigma = 5
 
 # Thresholds for binarisation
 threshold_binary = 'otsu'  # threshold for binary: a/r state detcetion -
-threshold_twitch = 'li' #threshold for twitch detection (more permissive -> detect more/lose less) - matches notebook default
+threshold_twitch = 'otsu' #threshold for twitch detection (more permissive -> detect more/lose less)
 # thresh_factor = 1.0  # used for "mean+std" option
 
-# Twitch detection thresholds - calculate framerate dynamically
-# Default averaged framerate
-framerate = 3  # (avg!) Hz fallback
-
-if fps_override is not None:
-    original_framerate = fps_override
-    avg_block_size = avg_factor if avg_factor is not None else 5
-    averaged_framerate = original_framerate / avg_block_size
-    framerate = averaged_framerate
-    
-    print(f"=== FRAMERATE CALCULATION ===")
-    print(f"Original FPS: {original_framerate} Hz")
-    print(f"Averaging factor: {avg_block_size}")
-    print(f"Calculated averaged FPS: {averaged_framerate} Hz")
-    print(f"Using framerate for analysis: {framerate} Hz")
-    print(f"==============================")
-else:
-    print(f"Using default framerate: {framerate} Hz")
-
-# Adjust smoothing window based on ACTUAL averaged framerate
-# Higher averaged framerate = less smoothing needed in seconds
-if framerate >= 5:  # High averaged framerate (5Hz+)
-    min_window_secs = 1  # minimal smoothing in seconds
-    max_window_secs = 3  # maximal smoothing in seconds
-    smoothing_category = "HIGH_FRAMERATE"
-else:  # Low averaged framerate (<5Hz)
-    min_window_secs = 3  # minimal smoothing in seconds
-    max_window_secs = 15  # maximal smoothing in seconds
-    smoothing_category = "LOW_FRAMERATE"
-
-print(f"Smoothing category: {smoothing_category}")
-print(f"Window range: {min_window_secs}-{max_window_secs} seconds") 
-
+# Twitch detection thresholds
+framerate = 3  # (avg!) Hz   # Careful: set rifght framerate (avged or raw motion) (also for time thresholds)
 scaling_factor = 5 # for matching back to original time
 
 active_motion_duration_min = framerate * 1 # 1 sec 
@@ -185,11 +155,25 @@ print(f' max_twitch_allowed: {twitch_duration_max/framerate} sec')
 
 is_sleap = False
 
+
+# In[10]:
+
+
+active_motion_duration_min
+
+
+# In[11]:
+
+
 save_dir = subject_path
-save_dir_videography = mkdir(f'{save_dir}/mousecraft_automatic_classifications')
+save_dir_videography = mkdir(f'{save_dir}/motion_annotation_average')
 save_dir_videography = Path(save_dir_videography)
 
+
 # # Compute/Load motion energy
+
+# In[12]:
+
 
 def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=None):
     """
@@ -247,34 +231,26 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
     
     return motion_energy
 
-# Load motion energy: prefer external path if provided, else compute from video
-if external_me_path is not None:
-    print(f"Loading external motion energy: {external_me_path}")
-    motion_energy_orig = np.load(external_me_path)
-else:
-    motion_energy_orig = compute_motion_energy(movie_path=movie_path, xrange=None, yrange=None, save_path=subject_path)
 
-# Apply start/end frame cropping if specified
-if start_frame is not None or end_frame is not None:
-    original_length = len(motion_energy_orig)
-    start = start_frame if start_frame is not None else 0
-    end = end_frame if end_frame is not None else original_length
-    
-    # Validate bounds
-    if start < 0:
-        start = 0
-    if end > original_length:
-        end = original_length
-    if start >= end:
-        raise ValueError(f"Invalid range: start ({start}) must be less than end ({end})")
-    
-    print(f"Cropping motion energy from frames {start} to {end} (original length: {original_length})")
-    motion_energy_orig = motion_energy_orig[start:end]
-    print(f"New motion energy length: {len(motion_energy_orig)}")
+# In[13]:
+
+
+motion_energy_orig = compute_motion_energy(movie_path=movie_path, xrange=None, yrange=None, save_path=subject_path) #if first run, provide movie_path
+
+# if len(motion_energy) != 3600:
+#     motion_energy = pad(motion_energy)
+#     motion_energy = average_frames(motion_energy, avg_block = 5) # avg as needed 
 
 plt.plot(motion_energy_orig)
 plt.show()
 
+
+# # Load SLEAP output (if computed)
+
+# In[14]:
+
+
+#load sleap output
 
 if is_sleap is True:
     files = os.listdir(subject_path)
@@ -292,7 +268,11 @@ if is_sleap is True:
         else:
             raise FileExistsError("Multiple CSV files found. Please ensure there is only one CSV file in the subject directory.")
 
+
 # # Average motion energy (from 15Hz to 3Hz - denoise)
+
+# In[15]:
+
 
 def average_frames(data, avg_block=None):
     # Ensure data is a NumPy array
@@ -314,22 +294,48 @@ def average_frames(data, avg_block=None):
     print(f'Congrats again! Data is now {len(avg_data)}')
     return avg_data
 
-# Use avg_factor from command line or default to 5
-avg_block_size = avg_factor if avg_factor is not None else 5
-print(f"Using averaging factor: {avg_block_size}")
 
-if len(motion_energy_orig) % 2 != 0: 
-    motion_energy = pad(motion_energy_orig)
-    motion_energy = average_frames(motion_energy, avg_block = avg_block_size)
+# In[16]:
+
+
+# Crop at 36000 frames
+motion_energy_orig_cropped = motion_energy_orig[:36000]
+
+# Then apply padding / averaging
+if len(motion_energy_orig_cropped) % 2 != 0:
+    motion_energy = pad(motion_energy_orig_cropped)
+    motion_energy = average_frames(motion_energy, avg_block=5)
 else:
-    motion_energy = average_frames(motion_energy_orig, avg_block = avg_block_size)
+    motion_energy = average_frames(motion_energy_orig_cropped, avg_block=5)
+
+# if len(motion_energy_orig) % 2 != 0: 
+#     motion_energy = pad(motion_energy_orig)
+#     motion_energy = average_frames(motion_energy, avg_block = 5)
+# else:
+#     motion_energy = average_frames(motion_energy_orig, avg_block = 5)
+
+
+# In[17]:
+
 
 length_acts = len(motion_energy)
 # for plotting xticks to seconds
 frame_ticks = range(0, length_acts+ 100, 300)  # 300 frames is 100 sec
 second_ticks = [int(tick/framerate) for tick in frame_ticks]   # Convert to seconds
 
+
+# In[18]:
+
+
+second_ticks
+
+
 # # Smooth motion energy
+
+# In[19]:
+
+
+from scipy import stats 
 
 def signaltonoise(a, axis=0, ddof=0):
     a = np.asanyarray(a)
@@ -337,31 +343,33 @@ def signaltonoise(a, axis=0, ddof=0):
     sd = a.std(axis=axis, ddof=ddof)
     return np.where(sd == 0, 0, m/sd)
 
+
 # # Compute SNR (signal to noise ratio) of motion energy & adjust smoothing 
 
+# In[20]:
+
+
 snr = signaltonoise(motion_energy)
-print(snr) 
+print(snr)
+
+
+# In[21]:
+
+
+min_window_secs = 3  # minimal smoothing in seconds
+max_window_secs = 15  # maximal smoothing in seconds here 
 
 # Map SNR to window size: higher SNR -> shorter window
-snr = signaltonoise(motion_energy)
-print(f"Raw SNR: {snr}")
 snr = np.clip(snr, 0.1, 10)  # avoid divide-by-zero or extremes
-print(f"Clipped SNR: {snr}")
 snr_norm = (10 - snr) / 9.9  # normalize to [0, 1]
-print(f"SNR norm: {snr_norm}")
 adaptive_window_secs = min_window_secs + snr_norm * (max_window_secs - min_window_secs)
-print(f"Adaptive window secs: {adaptive_window_secs}")
 adaptive_window_length = int(adaptive_window_secs * framerate)
-print(f"Adaptive window length (raw): {adaptive_window_length}")
-print(f"Framerate used: {framerate}")
 
 # Ensure odd and >= polyorder+2
 polyorder = 3
 if adaptive_window_length % 2 == 0:
     adaptive_window_length += 1
 adaptive_window_length = max(adaptive_window_length, polyorder + 3)
-
-print(f"Final adaptive window length: {adaptive_window_length}")
 
 print(f"Adaptive window length: {adaptive_window_length}")
 
@@ -377,12 +385,16 @@ plt.title(f"adaptive Smoothing | SNR = {snr:.2f}")
 plt.tight_layout()
 plt.show()
 
+
 # # Bimodality test
 # 
 # Check whether there are the motion contains two states:
 # 
 # If yes: proceed with active-rest binarisation
 # If not: Then assume we only have rest/sleep state and do directly 
+
+# In[22]:
+
 
 def is_bimodal_with_two_peaks(data, plot=False, prominence=0.1):
     """
@@ -419,25 +431,33 @@ def is_bimodal_with_two_peaks(data, plot=False, prominence=0.1):
 
     return bimodal, num_peaks
 
-if diptest is not None:
-    dip_stat, dip_p_value = diptest(smoothed_motion_energy)
-    print(f"Hartigan's Dip Test: Dip = {dip_stat:.2f}, p-value = {dip_p_value:.3f}")
-else:
-    dip_stat, dip_p_value = None, 1.0
-    print("Hartigan's Dip Test not available (diptest not installed). Skipping.")
+
+# In[23]:
+
+
+dip_stat, dip_p_value = diptest(smoothed_motion_energy)
+print(f"Hartigan's Dip Test: Dip = {dip_stat:.2f}, p-value = {dip_p_value:.3f}")
+
 
 bimodal, num_peaks = is_bimodal_with_two_peaks(smoothed_motion_energy, plot=True)
 
 if bimodal:
-    print("OK Detected bimodal distribution (2 peaks)")
+    print("✅ Detected bimodal distribution (2 peaks)")
 else:
-    print(f"WARN Detected {num_peaks} peaks - not strictly bimodal")
+    print(f"⚠️ Detected {num_peaks} peaks — not strictly bimodal")
 
 if dip_p_value < 0.05 or bimodal==True:
     bimodality = True 
 else:
     bimodality = False   
 
+
+# In[24]:
+
+
+from scipy.stats import gaussian_kde
+from scipy.signal import find_peaks
+from diptest import diptest
 
 def bimodality_test(data, kde_prominence=0.1, plot=False):
     """
@@ -461,11 +481,8 @@ def bimodality_test(data, kde_prominence=0.1, plot=False):
     peaks, props = find_peaks(density, prominence=kde_prominence)
     num_kde_peaks = len(peaks)
 
-    # Dip test (if available)
-    if diptest is not None:
-        dip_stat, dip_p = diptest(data)  # dip test for bimodality : https://skeptric.com/dip-statistic/
-    else:
-        dip_stat, dip_p = None, 1.0
+    # Dip test
+    dip_stat, dip_p = diptest(data) # dip test for bimodality : https://skeptric.com/dip-statistic/
 
     bimodal = (num_kde_peaks == 2) or (dip_p < 0.05)
 
@@ -489,15 +506,31 @@ def bimodality_test(data, kde_prominence=0.1, plot=False):
 
     return bimodal, bimodality_metrics
 
+
+# In[25]:
+
+
 bimodal, dbimodality_metrics = bimodality_test(smoothed_motion_energy, kde_prominence=0.1, plot=True)
 
+
+# In[26]:
+
+
 print(bimodal)
+
 
 # # Choose statistical threshold for binarisation
 # 
 # Otsu should theoretically work if there is active-wake transition
 
+# In[27]:
+
+
 # if bimodality 
+
+
+# In[28]:
+
 
 def compute_thresholds_for_bin_state_detection(motion_signal, title='', save_dir=None, plot=True):
     '''
@@ -529,135 +562,428 @@ def compute_thresholds_for_bin_state_detection(motion_signal, title='', save_dir
         plt.savefig(save_dir / f'{title}.png')
         plt.show()
 
-    # Return 3 thresholds for binary state detection
     return threshold_motion_mean_sd, threshold_motion_li, threshold_motion_otsu
 
-def compute_thresholds_for_twitch(motion_signal, save_dir=None, plot=True):
-    """
-    Compute thresholds tailored for twitch detection on rest-only distribution.
-    Returns five values: mean+3*sd, Li, Otsu, MAD-based, 95th percentile.
-    """
-    motion_signal = np.asarray(motion_signal)
-    motion_mean = np.mean(motion_signal)
-    motion_sd = np.std(motion_signal)
 
-    threshold_motion_mean_sd = motion_mean + 3*motion_sd  # stricter for twitches
-    threshold_motion_li = filters.threshold_li(motion_signal)
-    threshold_motion_otsu = filters.threshold_otsu(motion_signal)
-    threshold_95 = np.percentile(motion_signal, 95)
+# In[29]:
 
-    # Local import to avoid hard dependency at module import time
-    try:
-        from statsmodels.robust import mad
-        threshold_mad = np.median(motion_signal) + 3 * mad(motion_signal)
-    except Exception:
-        threshold_mad = None
 
-    if plot:
-        plt.figure(figsize=(5, 5), dpi=300)
-        plt.title('stat thresholds on rest (twitch)')
-        plt.hist(motion_signal, bins=70, alpha=0.9)
-        # mark threshold lines
-        plt.axvline(x=threshold_motion_mean_sd, color='red', label='mean + 3*sd', linestyle='--')
-        plt.axvline(x=threshold_motion_otsu, color='salmon', label='Otsu', linestyle='--')
-        plt.axvline(x=threshold_motion_li, color='darkred', label='Li', linestyle='--')
-        if threshold_mad is not None:
-            plt.axvline(x=threshold_mad, color='pink', label='MAD', linestyle='--')
-        plt.axvline(x=threshold_95, color='purple', label='95th percentile', linestyle='--')
-        plt.legend()
-        if save_dir is not None:
-            plt.savefig(Path(save_dir) / 'binary_state_thresholds_twitch.png')
-        plt.show()
+threshold_motion_mean_sd, threshold_motion_li, threshold_motion_otsu = compute_thresholds_for_bin_state_detection(smoothed_motion_energy, title='stat_thresholds_for_bin_state_detection', save_dir=save_dir_videography, plot=True)
 
-    return threshold_motion_mean_sd, threshold_motion_li, threshold_motion_otsu, threshold_mad, threshold_95
 
-# Binary state detection (active vs rest)
-threshold_motion_mean_sd, threshold_motion_li, threshold_motion_otsu = \
-    compute_thresholds_for_bin_state_detection(smoothed_motion_energy, 
-                                               title='stat_thresholds_for_bin_state_detection', 
-                                               save_dir=save_dir_videography, plot=True)
+# # Choose binarisation threshold 
 
-# Select binary threshold based on user choice
-if binary_method == 'otsu':
-    binary_threshold = threshold_motion_otsu
-elif binary_method == 'li':
-    binary_threshold = threshold_motion_li
-elif binary_method == 'mean_sd':
-    binary_threshold = threshold_motion_mean_sd
-else:
-    binary_threshold = threshold_motion_otsu
+# In[30]:
+
+
+binary_threshold = threshold_motion_otsu #makes sense when we expect distribution to be bimodal 
+
+
+# # Binarise motion energy
+
+# In[31]:
+
+
+# old function, without check of both has_active and bimodality to binarise in two states
+
+# def binarise_motion(motion_signal, binary_threshold, min_duration, min_inactive_gap=9, bimodality=bimodality):
+#     '''
+#     Binarises motion signal (eg mot_en) into 0s (rest) and 1s (active)
+#     input params:
+#     motion_signal: motion energy or other
+#     binary_threshold: sts threshold (li, otsu or mean_sd for state detection)
+#     min_duration: min_duration threshold to be detected as awake/active motion
+#     bimodality: bool, T or F, whether the distribution is bimodal 
+    
+    
+#     returns:
+#     bin_motion_signal: bin array of 0s and 1s 
+#     inds_active_state: indices of frames whens state is active
+#     inds_rest_state: indices of frames when state is rest/inactive 
+
+#     '''
+    
+#     bin_motion_signal = np.zeros(len(motion_signal), dtype=int)
+
+#     if bimodality is not False: # if 
+
+#     # get boolean array 
+    
+#         all_active_motions_detected = motion_signal > binary_threshold 
+    
+#         # labels continuous segments that pass the threshold 
+    
+#         labeled_array, n_features = label(all_active_motions_detected) #how many active motions where found 
+        
+#         for i in range(1, n_features+1):
+#             segment = np.where(labeled_array == i)[0]
+#             if len(segment) > min_duration:
+#                 bin_motion_signal[segment] = 1
+    
+#     inds_active_state = np.where(bin_motion_signal ==1)
+#     inds_rest_state = np.where(bin_motion_signal ==0)
+    
+#     return bin_motion_signal, inds_active_state, inds_rest_state
+
+
+# In[32]:
+
+
+import numpy as np
+from scipy.ndimage import label
 
 def binarise_motion(motion_signal, binary_threshold, min_duration, min_inactive_gap=9, bimodality=False):
-    """Binarise motion signal into active (1) vs rest (0) using threshold and min segment duration."""
+    '''
+    Binarises motion signal into 0s (rest) and 1s (active).
+    
+    Parameters:
+    - motion_signal: 1D array-like, motion energy or similar signal.
+    - binary_threshold: threshold to classify activity.
+    - min_duration: minimum number of consecutive frames to qualify as active motion.
+    - min_inactive_gap: optional, minimum gap to consider between active segments (not yet implemented here).
+    - bimodality: bool, whether the motion signal distribution is considered bimodal.
+
+    Returns:
+    - bin_motion_signal: binary array of 0s (rest) and 1s (active)
+    - inds_active_state: indices where state is active (1)
+    - inds_rest_state: indices where state is rest (0)
+    '''
+    
     bin_motion_signal = np.zeros(len(motion_signal), dtype=int)
 
+    # Step 1: Check if any motion segment passes the threshold and min_duration
     above_thresh = motion_signal > binary_threshold
     labeled_array, n_features = label(above_thresh)
-
+    
     has_active_motion = False
     for i in range(1, n_features + 1):
         segment = np.where(labeled_array == i)[0]
         if len(segment) > min_duration:
             has_active_motion = True
-
+            break
+    
+    # Step 2: Apply binarisation if active motion exists or bimodality is True
     if has_active_motion or bimodality:
         for i in range(1, n_features + 1):
             segment = np.where(labeled_array == i)[0]
             if len(segment) > min_duration:
                 bin_motion_signal[segment] = 1
-
+        # Otherwise, remains 0 (rest)
+    
+    # Step 3: Get indices
     inds_active_state = np.where(bin_motion_signal == 1)[0]
     inds_rest_state = np.where(bin_motion_signal == 0)[0]
 
     return has_active_motion, bin_motion_signal, inds_active_state, inds_rest_state
 
-# Run binarisation on smoothed motion energy
-has_active_motion, bin_motion_energy, inds_active_state, inds_rest_state = \
-    binarise_motion(smoothed_motion_energy, binary_threshold=binary_threshold, 
-                    min_duration=active_motion_duration_min, min_inactive_gap=9, 
-                    bimodality=bimodality)
 
-# Onsets/offsets for active motion
+# In[33]:
+
+
+active_motion_duration_min
+
+
+# In[34]:
+
+
+bimodality
+
+
+# In[35]:
+
+
+has_active_motion, bin_motion_energy, inds_active_state, inds_rest_state =  binarise_motion(smoothed_motion_energy, binary_threshold=binary_threshold, min_duration=active_motion_duration_min, min_inactive_gap=9, bimodality=bimodality)
+
+
+# In[36]:
+
+
+print(inds_rest_state) # all if unimodal
+
+
+# In[37]:
+
+
+has_active_motion
+
+
+# # Plot binary motion (Active - 1 / Rest - 0)
+
+# In[38]:
+
+
+plt.plot(bin_motion_energy, color='orange', linewidth=2)
+plt.plot(smoothed_motion_energy, linewidth=2)
+plt.title('binary motion_energy', fontsize=25)
+plt.axhline(y=threshold_motion_otsu, color='red', linestyle='--', label='binary threshold', linewidth=3)
+# plt.savefig(save_dir_videography + 'thresholded_binarised_motion_energy.png')
+plt.show()
+
+
+# In[39]:
+
+
+from scipy.signal import find_peaks
+
+
+# In[40]:
+
+
+# # Compute first derivative
+# diff_motion = np.gradient(motion_energy)
+
+# # Find peaks in the derivative where slope is steep
+# peaks, _ = find_peaks(diff_motion, height=some_slope_threshold)
+
+
+# In[41]:
+
+
+# from scipy.fft import fft
+# power = np.abs(fft(motion_energy[0:3600])) 
+
+
+# # Define onsets and offsets of active motion 
+
+# In[42]:
+
+
 active_motion_onsets = get_onsets(bin_motion_energy)
 active_motion_offsets = get_offsets(bin_motion_energy)
 
-# Twitch candidate selection on rest periods
-rest_inds = np.where(bin_motion_energy == 0)[0]
-rest_period = motion_energy[rest_inds] if len(rest_inds) > 0 else np.array([])
 
-# Compute twitch thresholds on rest-only distribution
-if len(rest_period) > 0:
-    twitch_threshold_motion_mean_sd, twitch_threshold_motion_li, twitch_threshold_motion_otsu, threshold_mad, threshold_95 = \
-        compute_thresholds_for_twitch(rest_period, save_dir=save_dir_videography, plot=True)
-else:
-    twitch_threshold_motion_mean_sd = twitch_threshold_motion_li = twitch_threshold_motion_otsu = None
-    threshold_mad = threshold_95 = None
+# In[43]:
 
-# Choose twitch threshold - always respect user's choice
-if twitch_method == 'li' and twitch_threshold_motion_li is not None:
+
+active_motion_onsets # empty if unimodal
+
+
+# # Classify Active (awake) motions to short / long and visualise them
+
+# In[44]:
+
+
+def classify_active_motion_segments(bin_motion_signal, motion_signal, short_threshold, long_threshold):
+    """
+    Classify active/awake motion segments into short (1–3 sec), long (>3 sec), and too short (<1 sec, those are exluded in awake motion detection and set to 0).
+
+    Parameters:
+    - bin_motion_signal: 1D array of HMM or thresholded motion states (1 for active, 0 for inactive)
+    - motion_signal: 1D array of motion energy values
+    - short_threshold: in frames, minimum duration for short active motions (e.g., 3 or 1s at 3Hz)
+    - long_threshold: in frames, minimum duration for long active motions (e.g., 9 or 3s at 3Hz)
+
+    Returns:
+    - bin_short_active_motion: binary array marking short motions (1-3s)
+    - bin_long_active_motion: binary array marking long motions (>3s)
+    - bin_too_short_active_motion: binary array marking short blips (<1s)
+    - and correspondings inds of long, short or too short (excluded) motions
+    """
+    labeled_array, num_features = label(bin_motion_signal == 1)
+
+    short_active_motion_inds = np.array([], dtype=int)
+    long_active_motion_inds = np.array([], dtype=int)
+    too_short_active_motion_inds = np.array([], dtype=int)
+
+    bin_short_active_motion = np.zeros(len(motion_signal), dtype=int)
+    bin_long_active_motion = np.zeros(len(motion_signal), dtype=int)
+    bin_too_short_active_motion = np.zeros(len(motion_signal), dtype=int)
+
+    for i in range(1, num_features + 1):
+        segment = np.where(labeled_array == i)[0]
+
+        if len(segment) > long_threshold:
+            bin_long_active_motion[segment] = 1
+        elif len(segment) > short_threshold:
+            bin_short_active_motion[segment] = 1
+        elif len(segment) > 0: # but shorter than short threshold 
+            bin_too_short_active_motion[segment] = 0 # mark as inactive 
+
+        long_active_motion_inds = np.where(bin_long_active_motion==1)[0]
+        short_active_motion_inds = np.where(bin_short_active_motion==1)[0]
+        too_short_active_motion_inds = np.where(bin_too_short_active_motion==1)[0]
+
+            
+    return bin_short_active_motion, short_active_motion_inds, bin_long_active_motion, long_active_motion_inds, bin_too_short_active_motion, too_short_active_motion_inds
+
+
+# In[45]:
+
+
+# classify active motions detected 
+bin_short_active_motion, short_active_motion_inds, bin_long_active_motion, long_active_motion_inds, bin_too_short_active_motion, too_short_active_motion_inds = classify_active_motion_segments(
+    bin_motion_energy,
+    motion_energy,
+    short_threshold=active_motion_duration_min,
+    long_threshold=long_active_motion_duration_min
+)
+
+# plot classified active motions detected 
+plot_active_motion_classification_subplots(
+    motion_signal=motion_energy,
+    smoothed_motion_signal=smoothed_motion_energy,
+    bin_motion_energy=bin_motion_energy,
+    bin_long_active_motion=bin_long_active_motion,
+    bin_short_active_motion=bin_short_active_motion,
+    long_active_motion_inds=long_active_motion_inds,
+    short_active_motion_inds=short_active_motion_inds,
+    threshold=threshold_motion_otsu,
+    save_path=save_dir_videography / 'subplots_bin_motion_energy_classified.png',
+)
+
+
+# In[46]:
+
+
+# turn indices into continuous segments eg 25-100 is active seg 1, 500-805 active seg 2 etc
+if bimodality:
+    active_segments = get_active_segments(inds_active_state) #all not only long
+    long_active_segments = get_active_segments(long_active_motion_inds) #all not only long , already numpy
+# if len(short_active_segments)>1: #to solve not defined
+    # short_active_segments = get_active_segments(short_active_motion_inds)
+
+
+# # Twitch detection 
+# 
+# TODO: maybe low pass filter rest periods to remove noises 
+
+# In[47]:
+
+
+rest_period = motion_energy[inds_rest_state] #identify periods of low motion energy ==0 (non smoothed (!))
+rest_period = rest_period.flatten()
+
+
+# In[48]:
+
+
+log_signal = np.log1p(rest_period)  # log1p avoids issues with zeroes
+threshold_log= np.percentile(rest_period, 95)
+
+
+# In[49]:
+
+
+from statsmodels.robust import mad
+
+def compute_thresholds_for_bin_state_detection(motion_signal, save_dir=None, plot=True):
+    '''
+    Compute statistical thresholds to use for threshold-based state detection (active/awake - rest)
+    Here we use: Otsu (prefer if binary distribution), Li (mutliple peak distribution), or mean+sd (gaussian distribution)
+    '''
+    
+    # mean+sd threshold 
+    motion_mean = np.mean(motion_signal)
+    motion_sd = np.std(motion_signal)
+
+    threshold_motion_mean_sd = motion_mean + 3*motion_sd
+
+    threshold_motion_li = filters.threshold_li(motion_signal)
+
+    threshold_motion_otsu = filters.threshold_otsu(motion_signal)
+
+    threshold_95 = np.percentile(motion_signal, 95) 
+
+    # log_signal = np.log1p(motion_signal)  # log1p avoids issues with zeroes
+    # threshold_log= np.percentile(motion_signal, 95)
+
+    med = np.median(motion_signal)
+    mad_val = mad(motion_signal)
+    threshold_mad = med + 3 * mad_val  # 3x MAD is analogous to ~3σ in normal data
+
+    if plot:
+        plt.figure(figsize=(5, 5), dpi=300)
+        plt.title('stat thresholds on mot_en')
+        plt.hist(motion_signal, bins=70, alpha=0.9)
+
+        # mark threshold lines
+        plt.axvline(x=threshold_motion_mean_sd, color='red', label='mean + sd', linestyle='--')
+        plt.axvline(x=threshold_motion_otsu, color='salmon', label='Otsu', linestyle='--')
+        plt.axvline(x=threshold_motion_li, color='darkred', label='Li', linestyle='--')
+        # plt.axvline(x=threshold_log, color='pink', label='95 threshold on log_motion')
+        plt.axvline(x=threshold_mad, color='pink', label='threshold mad', linestyle='--')
+        plt.axvline(x=threshold_95, color='purple', label='threshold 95%', linestyle='--')
+
+
+        plt.legend()
+        plt.savefig(save_dir / 'binary_state_thresholds.png')
+        plt.show()
+
+    return threshold_motion_mean_sd, threshold_motion_li, threshold_motion_otsu, threshold_mad, threshold_95
+
+
+# In[50]:
+
+
+twitch_threshold_motion_mean_sd, twitch_threshold_motion_li, twitch_threshold_motion_otsu, threshold_mad, threshold_95 = compute_thresholds_for_bin_state_detection(rest_period, save_dir=save_dir_videography, plot=True)
+
+
+# # Choose twitch threshold 
+
+# In[51]:
+
+
+# choose a threshold 
+# twitch_threshold = twitch_threshold_li #more permissive of twitches --> more twitches detected (pre-filtering)
+
+if bimodality == True:
     twitch_threshold = twitch_threshold_motion_li
-elif twitch_method == 'mad' and threshold_mad is not None:
+elif has_active_motion:
+    twitch_threshold = twitch_threshold_motion_li
+else:
     twitch_threshold = threshold_mad
-elif twitch_method == 'percentile_95' and threshold_95 is not None:
-    twitch_threshold = threshold_95
-elif twitch_method == 'mean_3sd' and twitch_threshold_motion_mean_sd is not None:
-    twitch_threshold = twitch_threshold_motion_mean_sd
-elif twitch_method == 'otsu' and twitch_threshold_motion_otsu is not None:
-    twitch_threshold = twitch_threshold_motion_otsu
-else:
-    # Fallback heuristic
-    if len(rest_period) > 0 and (bimodality is True):
-        twitch_threshold = twitch_threshold_motion_li if twitch_threshold_motion_li is not None else (
-            twitch_threshold_motion_otsu if twitch_threshold_motion_otsu is not None else threshold_mad)
-    else:
-        twitch_threshold = threshold_mad if threshold_mad is not None else twitch_threshold_motion_otsu
 
-# Indices of unfiltered twitch candidates (rest frames above threshold)
-if len(rest_period) > 0 and twitch_threshold is not None:
-    inds_mask = rest_period > twitch_threshold
-    inds_twitches_unfiltered = rest_inds[inds_mask]
-else:
-    inds_twitches_unfiltered = np.array([], dtype=int)
+
+# In[52]:
+
+
+inds_twitches_unfiltered = np.where(rest_period > twitch_threshold) #inds of prospective twitches (in array of low motion energy) careful its on the size of low motion array
+inds_twitches_unfiltered = inds_rest_state[inds_twitches_unfiltered] 
+
+
+# In[53]:
+
+
+unfiltered_putative_twitches_segments = find_sequential_groups(inds_twitches_unfiltered)
+len(unfiltered_putative_twitches_segments)
+
+
+# In[54]:
+
+
+def binarise_twitch(motion_energy, twitch_segments):
+
+    # Initialize bin_twitch   
+    bin_twitch = np.zeros(len(motion_energy))
+
+    # flatten the nested list
+    flat_inds = [idx for segment in twitch_segments for idx in segment] # filtered corrected twitch segments 
+
+    print("Flattened Indices:", flat_inds)
+
+    # Assign 1 to twitch inds
+    for idx in flat_inds:
+        if idx < len(motion_energy):  # Ensure index is within bounds
+            bin_twitch[idx] = 1
+            print(f"Assigning 1 at column {idx}")
+        else:
+            print(f"Skipping out-of-bounds index: {idx}")
+    return bin_twitch
+
+
+# In[55]:
+
+
+bin_putative_twitch = binarise_twitch(motion_energy, unfiltered_putative_twitches_segments) #segs 
+
+
+# # Filter twitches 
+# 
+
+# ### Based on proximity to wake motions 
+
+# In[56]:
+
 
 def filter_twitches_by_awake_proximity(inds_twitches, inds_active_state, min_distance=None):
 
@@ -666,8 +992,10 @@ def filter_twitches_by_awake_proximity(inds_twitches, inds_active_state, min_dis
     filtered_twitches = []
 
     if len(inds_active_array) == 0:
+        # if unimodal distribution so no active motions: return all twitches as valid
         return np.array(inds_twitches)
         
+
     for idx_twitch in inds_twitches:
         distance = np.abs(inds_active_array - idx_twitch)
         if np.min(distance) > min_distance:
@@ -677,27 +1005,108 @@ def filter_twitches_by_awake_proximity(inds_twitches, inds_active_state, min_dis
 
     return filtered_twitches
 
+
+# In[57]:
+
+
+twitch_min_distance_from_active
+
+
+# In[58]:
+
+
 inds_twitches_filtered_step1 = filter_twitches_by_awake_proximity(inds_twitches_unfiltered, inds_active_state, min_distance=twitch_min_distance_from_active) 
+
+
+# In[59]:
+
+
+len(inds_twitches_filtered_step1)
+
+
+# ### Based on duration 
+
+# In[60]:
+
+
+inds_active_state
+
+
+# In[61]:
+
 
 inds_twitches_segments = find_sequential_groups(inds_twitches_filtered_step1)
 
-if len(inds_active_state) > 1: 
+if len(inds_active_state) > 1: #becs it has length 1 its an empty list inside the array 
     active_motion_segments = find_sequential_groups(inds_active_state)
 else:
-    active_motion_segments = []  
+    active_motion_segments = []  # or handle empty case appropriately
     
 resting_motion_segments = find_sequential_groups(inds_rest_state)
 
+
+# In[62]:
+
+
+len(inds_twitches_segments)
+
+
+# In[63]:
+
+
+for seg in inds_twitches_segments:
+
+    time = np.arange(len(seg))/framerate
+    plt.plot(time, motion_energy[seg])
+    plt.title('twitch duration (s)')
+    plt.xlabel('sec')
+plt.savefig(save_dir_videography / 'twitch_duration_non_filtered.png')
+
+
+# In[64]:
+
+
+twitch_duration_max #frames 
+
+
+# In[65]:
+
+
+# filter twitches based on duration 
 def filter_segments_by_duration(segments, duration_threshold):
+# Filter out groups based on the duration threshold
     return [twitches for twitches in segments if len(twitches) <= duration_threshold]
 
+
+# In[66]:
+
+
+# get filtered twitches 
 inds_twitches_filtered_step2 = filter_segments_by_duration(inds_twitches_segments, twitch_duration_max)
+
+
+# In[67]:
+
+
+twitch_duration_max
+
+
+# In[68]:
+
+
+len(inds_twitches_filtered_step2)
+
+
+# # Binarise twitch 
+
+# In[69]:
+
 
 def binarise_twitch(motion_energy, twitch_segments):
 
+    # Initialize bin_twitch   
     bin_twitch = np.zeros(len(motion_energy))
 
-    flat_inds = [idx for segment in twitch_segments for idx in segment] 
     # flatten the nested list
     flat_inds = [idx for segment in twitch_segments for idx in segment] # filtered corrected twitches 
 
@@ -712,17 +1121,36 @@ def binarise_twitch(motion_energy, twitch_segments):
             print(f"Skipping out-of-bounds index: {idx}")
     return bin_twitch
 
-bin_twitch_unfilt = binarise_twitch(motion_energy, inds_twitches_filtered_step2)
-# Keep an alias for downstream classification that expects the unfiltered twitch binary
-bin_putative_twitch = bin_twitch_unfilt
 
-# Define onset and offset of twitch
+# In[70]:
+
+
+bin_twitch_unfilt = binarise_twitch(motion_energy, inds_twitches_filtered_step2)
+
+
+# 
+# # Define onset and offset of twitch
+
+# In[71]:
+
+
 active_onsets = get_onsets(bin_motion_energy)
 active_offsets = get_offsets(bin_motion_energy)
 twitch_onsets = get_onsets(bin_twitch_unfilt)
 twitch_offsets = get_offsets(bin_twitch_unfilt)
 
-# Plot interval between twitches
+
+# # Plot interval between twitches (if burst - remove ?)
+
+# In[72]:
+
+
+# iti.min() #/framerate # 2*1/framerate = 0.66*2= 0.13 (133 ms)
+
+
+# In[73]:
+
+
 iti = np.diff(twitch_onsets/framerate)
 
 plt.figure(figsize=(5,5))
@@ -733,24 +1161,50 @@ plt.show()
 
 # most twithces occur in burst fashion 
 
+
 # # Filter twitches based on inter-twitch-interval
 # 
 # (aka discard bursts, keep sparse 'trusted' twitches)
 
+# In[74]:
+
+
 inds_twitches_filtered_final = filter_bursty_twitches(inds_twitches_filtered_step2, min_frame_gap=1) # 1 frame is ~330 ms
+
+
+# In[75]:
+
 
 print(inds_twitches_filtered_final)
 
+
+# In[76]:
+
+
+len(inds_twitches_filtered_final)
+
+
 # # Final binary twitch signal -after all filters-
+
+# In[77]:
+
 
 bin_twitch = binarise_twitch(motion_energy, inds_twitches_filtered_final) #expects class segments
 
+
 # # Get final onsets (post sparsness filtering)
+
+# In[78]:
+
 
 twitch_onsets = get_onsets(bin_twitch)
 twitch_offsets = get_offsets(bin_twitch)
 
+
 # # Plot twitches detected before and after sparse filtering 
+
+# In[79]:
+
 
 fig, axs = plt.subplots(2,1, figsize=(20,7), dpi=300)
 axs[0].plot(bin_twitch_unfilt, linewidth=0.8, c='red')
@@ -763,9 +1217,17 @@ axs[1].plot(motion_energy[:1000], alpha=0.7)
 plt.legend(loc = 'upper right')
 plt.show()
 
- 
+
+# In[80]:
+
+
+(np.where(bin_twitch[:]==1))
+
 
 # # Plot filtered twitches detected on motion energy
+
+# In[81]:
+
 
 def plot_detected_twitches(
     motion_energy,
@@ -825,6 +1287,16 @@ def plot_detected_twitches(
 
     plt.show()
 
+
+# In[82]:
+
+
+len(twitch_onsets)
+
+
+# In[83]:
+
+
 plot_detected_twitches(
     motion_energy=motion_energy,
     smoothed_motion_energy=smoothed_motion_energy,
@@ -837,13 +1309,26 @@ plot_detected_twitches(
     save_dir=save_dir_videography
 )
 
+
+# In[84]:
+
+
 n_twitches = len(twitch_onsets) 
 n_active_motions = len(active_motion_segments)
 
+
+# In[85]:
+
+
+# ========== SUMMARY ==========
 print(f"Total active/awake motions detected: {n_active_motions}")
 print(f"Total twitches detected: {n_twitches}")
 
+
 # # Final annotated motion 
+
+# In[86]:
+
 
 def get_behavior_classification(bin_putative_twitch, bin_twitch, bin_motion_energy, active_onsets, twitch_onsets):
     """
@@ -879,7 +1364,21 @@ def get_behavior_classification(bin_putative_twitch, bin_twitch, bin_motion_ener
 
     return classified_behavior, active_and_complex_motions, only_active_motions, complex_motion_segments ,complex_onsets, complex_offsets
 
+
+# In[87]:
+
+
+len(twitch_onsets)
+
+
+# In[88]:
+
+
 classified_behavior, active_and_complex_motions, only_active_motions, complex_motion_segments, complex_onsets, complex_offsets  = get_behavior_classification(bin_putative_twitch, bin_twitch, bin_motion_energy, active_onsets, twitch_onsets)
+
+
+# In[89]:
+
 
 import matplotlib.patches as mpatches 
 
@@ -959,11 +1458,23 @@ def plot_classified_behavior_timeline(classified_behavior, motion_signal, framer
     plt.tight_layout()
     plt.show()
 
+
+# In[90]:
+
+
 plot_classified_behavior_timeline(classified_behavior, motion_energy, framerate=framerate, save_dir=save_dir_videography)
+
+
+# In[91]:
+
 
 print(classified_behavior[100:1500])
 
+
 # # Save all outputs 
+
+# In[92]:
+
 
 classified_behavior, active_and_complex_motions, only_active_motions, complex_motion_segments, complex_onsets, complex_offsets
 auto_detection = {
@@ -997,7 +1508,15 @@ auto_detection = {
 np.save(save_dir + f'auto_detection.npy', auto_detection)
 # np.savez(save_dir + f"auto_detection_{ds}.npz", **auto_detection) 
 
+
+# In[93]:
+
+
 # save automatic_annotations
+
+
+# In[94]:
+
 
 automatic_annotations = {
     'active_onsets': active_motion_onsets,
@@ -1018,7 +1537,29 @@ automatic_annotations = {
 df = pd.DataFrame(dict([(k, pd.Series(v)) for k, v in automatic_annotations.items()]))
 df.to_excel(save_dir_videography/'automatic_annotations.xlsx', index=False)
 
+
+# In[95]:
+
+
+active_onsets
+
+
+# In[96]:
+
+
+twitch_onsets
+
+
+# In[97]:
+
+
+twitch_offsets
+
+
 # # Match detected frame indices on the avg back to original time 
+
+# In[98]:
+
 
 rescaled_annotations = {}
 for key, value in automatic_annotations.items():
@@ -1033,105 +1574,45 @@ df_rescaled = pd.DataFrame({k: pd.Series(v) for k, v in rescaled_annotations.ite
 # Save to Excel
 df_rescaled.to_excel(save_dir_videography / 'automatic_annotations_rescaled.xlsx', index=False)
 
-# Export analysis summary for GUI
-try:
-    # Get parent and grandparent folder names
-    parent_folder = os.path.basename(os.path.dirname(subject_path)) if os.path.dirname(subject_path) else None
-    grandparent_folder = os.path.basename(os.path.dirname(os.path.dirname(subject_path))) if os.path.dirname(os.path.dirname(subject_path)) else None
-    
-    summary = {
-        "mode": "external_me" if external_me_path is not None else "compute_from_tiff",
-        "paths": {
-            "subject_path": str(subject_path),
-            "parent_folder": parent_folder,
-            "grandparent_folder": grandparent_folder,
-            "output_dir": str(save_dir_videography),
-            "external_me_path": str(external_me_path) if external_me_path else None,
-        },
-        "snr": float(snr) if 'snr' in locals() else None,
-        "smoothing": {
-            "adaptive_window_length": int(adaptive_window_length) if 'adaptive_window_length' in locals() else None,
-            "polyorder": int(polyorder) if 'polyorder' in locals() else None,
-        },
-        "bimodality": {
-            "is_bimodal": bool(bimodality) if 'bimodality' in locals() else None,
-            "num_kde_peaks": int(num_peaks) if 'num_peaks' in locals() else None,
-            "dip_stat": float(dip_stat) if 'dip_stat' in locals() else None,
-            "dip_p_value": float(dip_p_value) if 'dip_p_value' in locals() else None,
-        },
-        "thresholds": {
-            "binary": {
-                "method": binary_method,
-                "value": float(binary_threshold) if 'binary_threshold' in locals() else None,
-                "candidates": {
-                    "mean_sd": float(threshold_motion_mean_sd) if 'threshold_motion_mean_sd' in locals() else None,
-                    "li": float(threshold_motion_li) if 'threshold_motion_li' in locals() else None,
-                    "otsu": float(threshold_motion_otsu) if 'threshold_motion_otsu' in locals() else None,
-                }
-            },
-            "twitch": {
-                "method": twitch_method,
-                "value": float(twitch_threshold) if 'twitch_threshold' in locals() else None,
-                "candidates": {
-                    "mean_3sd": float(twitch_threshold_motion_mean_sd) if 'twitch_threshold_motion_mean_sd' in locals() else None,
-                    "li": float(twitch_threshold_motion_li) if 'twitch_threshold_motion_li' in locals() else None,
-                    "otsu": float(twitch_threshold_motion_otsu) if 'twitch_threshold_motion_otsu' in locals() else None,
-                    "mad": float(threshold_mad) if 'threshold_mad' in locals() else None,
-                    "percentile_95": float(threshold_95) if 'threshold_95' in locals() else None,
-                }
-            }
-        },
-        "counts": {
-            "n_active_motions": int(n_active_motions) if 'n_active_motions' in locals() else None,
-            "n_twitches": int(n_twitches) if 'n_twitches' in locals() else None,
-        },
-        "params": {
-            "framerate": int(framerate),
-            "twitch_min_distance_from_active": int(twitch_min_distance_from_active),
-            "active_motion_duration_min": int(active_motion_duration_min),
-            "long_active_motion_duration_min": int(long_active_motion_duration_min),
-        }
-    }
-    with open(save_dir_videography / 'analysis_summary.json', 'w', encoding='utf-8') as f:
-        json.dump(summary, f, indent=2)
-    print(f"Saved analysis summary to {save_dir_videography / 'analysis_summary.json'}")
-except Exception as e:
-    print(f"Warning: failed to write analysis_summary.json: {e}")
+
+# In[99]:
+
+
+os.getcwd()
+
+
+# In[100]:
+
 
 ## Adjusting script's output (to increase readability and facilitate input to GUI)
 
+
 # # If GUI: (input)
+
+# In[101]:
+
 
 # Prepare motion energy and total frames
 n_frames = len(motion_energy_orig)
-# Adjust frame_idx to account for cropping
-if start_frame is not None:
-    frame_idx = np.arange(start_frame, start_frame + n_frames)
-else:
-    frame_idx = np.arange(n_frames)
+frame_idx = np.arange(n_frames)
 
-# Initialize binary arrays (0 = not in state, 1 = in state) at original resolution
+# Initialize binary arrays (0 = not in state, 1 = in state)
 active = np.zeros(n_frames, dtype=int)
 twitch = np.zeros(n_frames, dtype=int)
 complex_ = np.zeros(n_frames, dtype=int)
 
-# Function to upscale classification from averaged data back to original resolution
-def upscale_classification(classified_behavior_avg, avg_block_size, original_length):
-    """Upscale classification from averaged data to original frame resolution"""
-    # Repeat each classification value avg_block_size times
-    upscaled = np.repeat(classified_behavior_avg, avg_block_size)
-    # Trim to match original length
-    return upscaled[:original_length]
+# Function to fill ranges between onset and offset
+def fill_intervals(onsets, offsets, target_array):
+    for on, off in zip(onsets, offsets):
+        if 0 <= on < off <= n_frames:
+            target_array[on:off] = 1
+        elif 0 <= on < n_frames:
+            target_array[on:] = 1  # In case offset is missing or out of bounds
 
-# Upscale the classified behavior back to original resolution
-classified_behavior_full_res = upscale_classification(classified_behavior, avg_block_size, n_frames)
-
-# Convert the upscaled classification to individual binary arrays
-active[classified_behavior_full_res == 1] = 1
-twitch[classified_behavior_full_res == -1] = 1  
-complex_[classified_behavior_full_res == 2] = 1
-
-print(f"Classification upscaled from {len(classified_behavior)} to {len(classified_behavior_full_res)} frames")
+# Fill activity intervals
+fill_intervals(rescaled_annotations.get("active_onsets", []), rescaled_annotations.get("active_offsets", []), active)
+fill_intervals(rescaled_annotations.get("twitch_onsets", []), rescaled_annotations.get("twitch_offsets", []), twitch)
+fill_intervals(rescaled_annotations.get("complex_onsets", []), rescaled_annotations.get("complex_offsets", []), complex_)
 
 # Create final framewise DataFrame
 df_framewise = pd.DataFrame({
@@ -1143,9 +1624,25 @@ df_framewise = pd.DataFrame({
 })
 
 # Save as CSV for GUI loading
-df_framewise.to_csv(save_dir_videography / f'mousecraft_auto_labels.csv', index=False)
+df_framewise.to_csv(save_dir_videography / f'gui_labels.csv', index=False)
+
+
+# In[102]:
+
+
+save_dir
+
 
 # # Write on video for validation (manual curation)
+
+# In[103]:
+
+
+movie_path
+
+
+# In[104]:
+
 
 # tiff = io.imread(movie_path, plugin='tifffile') #pil loads on snapshot 
 
@@ -1153,7 +1650,11 @@ df_framewise.to_csv(save_dir_videography / f'mousecraft_auto_labels.csv', index=
 # tiff -= np.min(tiff)
 # print(f'Shape of video: {tiff.shape}')
 
+
 # # LossLess compression (output tiff or avi)
+
+# In[105]:
+
 
 # # Normalize if needed
 # tiff = tiff - np.min(tiff)
@@ -1177,6 +1678,10 @@ df_framewise.to_csv(save_dir_videography / f'mousecraft_auto_labels.csv', index=
 #     out.write(frame)
 # out.release()
 # print("Saved to output_video.avi")
+
+
+# In[106]:
+
 
 # # Define onset points (from onset_twitch_1d)
 # for onset_time in twitch_onsets:
@@ -1215,6 +1720,11 @@ df_framewise.to_csv(save_dir_videography / f'mousecraft_auto_labels.csv', index=
 #         cv2.putText(frame_bgr, 'Complex motion', (50,100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 1, cv2.LINE_AA)
 #         tiff[complex_motion_onset] = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
     
+
+
+# In[107]:
+
+
 # output_dir = save_dir_videography / '_validation_twitch_video.tif'
 # # Export the marked frames as TIFF sequence
 # os.makedirs(output_dir, exist_ok=True)
@@ -1225,5 +1735,6 @@ df_framewise.to_csv(save_dir_videography / f'mousecraft_auto_labels.csv', index=
 #     img = Image.fromarray(frame)
 #     img.save(output_path)
     
+
 # print(f"Exported {len(tiff)} frames to {output_dir}")
 
