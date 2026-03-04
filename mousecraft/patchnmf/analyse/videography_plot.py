@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+from scipy.ndimage import label, binary_closing
+import numpy as np 
+import matplotlib.patches as mpatches 
 
 def plot_binary_motion_energy_states(smoothed_motion_energy, 
                                      naive_binary, 
@@ -129,7 +131,7 @@ def plot_detected_twitches(
     inds_twitches,
     frame_ticks,
     second_ticks,
-    save_dir_videography=None
+    save_dir=None
 ):
     """
     Plot the motion energy and smoothed motion energy with twitch detection.
@@ -142,7 +144,7 @@ def plot_detected_twitches(
     - inds_twitches: Indices where twitch segments start (onsets).
     - frame_ticks: Frame indices for x-axis.
     - second_ticks: Time ticks in seconds for x-axis.
-    - save_dir_videography: Optional directory to save the figure.
+    - save_dir: Optional directory to save the figure.
     """
     
     fig, axs = plt.subplots(2, 1, figsize=(15, 7), dpi=300)
@@ -173,9 +175,9 @@ def plot_detected_twitches(
     # Adjust layout and save the plot
     plt.subplots_adjust(hspace=0.6)
 
-    if save_dir_videography:
-        plt.savefig(save_dir_videography + 'trio_motion_energy_including_twitches.png')
-        print(f"Plot saved to: {save_dir_videography + 'trio_motion_energy_including_twitches.png'}")
+    if save_dir:
+        plt.savefig(save_dir + 'trio_motion_energy_including_twitches.png')
+        print(f"Plot saved to: {save_dir + 'trio_motion_energy_including_twitches.png'}")
 
     plt.show()
     
@@ -205,3 +207,188 @@ def plot_twitch_locations(motion_trace, twitch_indices, title='Detected twitches
     if save_path:
         plt.savefig(save_path)
     plt.show()
+
+def plot_detected_twitches(
+    motion_energy,
+    smoothed_motion_energy,
+    bin_motion_energy,
+    threshold_twitches,
+    threshold_motion_energy,
+    inds_twitches,
+    frame_ticks,
+    second_ticks,
+    save_dir=None
+):
+    """
+    Plot the motion energy and smoothed motion energy with twitch detection.
+
+    Parameters:
+    - motion_energy: Raw motion energy signal.
+    - smoothed_motion_energy: Smoothed motion energy signal.
+    - threshold_twitches: Threshold for twitch detection.
+    - threshold_motion_energy: Threshold for binary motion energy.
+    - inds_twitches: Indices where twitch segments start (onsets).
+    - frame_ticks: Frame indices for x-axis.
+    - second_ticks: Time ticks in seconds for x-axis.
+    - save_dir: Optional directory to save the figure.
+    """
+    
+    fig, axs = plt.subplots(2, 1, figsize=(10, 4), dpi=300)
+
+    # Plot raw and smoothed motion energy
+    axs[0].plot(motion_energy, linewidth=2, label='mot_en')
+    axs[0].plot(smoothed_motion_energy, color='orange', linewidth=1.5, label='mot_en smoothed')
+    # axs[0].axhline(y=threshold_twitches, color='red', linestyle='--', label='Twitch threshold')
+    axs[0].set_xticks(ticks=frame_ticks)
+    axs[0].set_xticklabels(second_ticks)
+    axs[0].legend(loc='upper right', fontsize=10)
+    axs[0].set_ylabel('mot_en')
+    axs[0].set_title('Twitch detection')
+
+    trio_motion_energy = bin_motion_energy.copy()
+    trio_motion_energy[inds_twitches] = -1  # mark twitch segments with -1
+
+    # Plot raw motion energy and binary motion energy (including twitch detection)
+    axs[1].plot(motion_energy, color='darkorange', linewidth=1, label='mot_en')
+    axs[1].plot(trio_motion_energy, linewidth=2, label='3 states on mot_en')
+    axs[1].axhline(y=threshold_twitches, color='red', linestyle='--', label='twitch threshold')
+    axs[1].set_xticks(ticks=frame_ticks)
+    axs[1].set_xticklabels(second_ticks, fontsize=12)
+    axs[1].set_xlabel('Time (s)', fontsize=15)
+    plt.axis('off')
+    axs[1].set_title('Twitch detection', fontsize=18)
+
+    # Adjust layout and save the plot
+    plt.subplots_adjust(hspace=0.6)
+
+    if save_dir:
+        plt.savefig(save_dir / 'trio_motion_energy_including_twitches.png')
+        print(f"Plot saved to: {save_dir / 'trio_motion_energy_including_twitches.png'}")
+
+    plt.show()
+
+def classify_active_motion_segments(bin_motion_signal, motion_signal, short_threshold, long_threshold):
+    """
+    Classify active/awake motion segments into short (1–3 sec), long (>3 sec), and too short (<1 sec, those are exluded in awake motion detection and set to 0).
+
+    Parameters:
+    - bin_motion_signal: 1D array of HMM or thresholded motion states (1 for active, 0 for inactive)
+    - motion_signal: 1D array of motion energy values
+    - short_threshold: in frames, minimum duration for short active motions (e.g., 3 or 1s at 3Hz)
+    - long_threshold: in frames, minimum duration for long active motions (e.g., 9 or 3s at 3Hz)
+
+    Returns:
+    - bin_short_active_motion: binary array marking short motions (1-3s)
+    - bin_long_active_motion: binary array marking long motions (>3s)
+    - bin_too_short_active_motion: binary array marking short blips (<1s)
+    - and correspondings inds of long, short or too short (excluded) motions
+    """
+    labeled_array, num_features = label(bin_motion_signal == 1)
+
+    short_active_motion_inds = np.array([], dtype=int)
+    long_active_motion_inds = np.array([], dtype=int)
+    too_short_active_motion_inds = np.array([], dtype=int)
+
+    bin_short_active_motion = np.zeros(len(motion_signal), dtype=int)
+    bin_long_active_motion = np.zeros(len(motion_signal), dtype=int)
+    bin_too_short_active_motion = np.zeros(len(motion_signal), dtype=int)
+
+    for i in range(1, num_features + 1):
+        segment = np.where(labeled_array == i)[0]
+
+        if len(segment) > long_threshold:
+            bin_long_active_motion[segment] = 1
+        elif len(segment) > short_threshold:
+            bin_short_active_motion[segment] = 1
+        elif len(segment) > 0: # but shorter than short threshold 
+            bin_too_short_active_motion[segment] = 0 # mark as inactive 
+
+        long_active_motion_inds = np.where(bin_long_active_motion==1)[0]
+        short_active_motion_inds = np.where(bin_short_active_motion==1)[0]
+        too_short_active_motion_inds = np.where(bin_too_short_active_motion==1)[0]
+
+            
+    return bin_short_active_motion, short_active_motion_inds, bin_long_active_motion, long_active_motion_inds, bin_too_short_active_motion, too_short_active_motion_inds
+
+
+def plot_classified_behavior_timeline(classified_behavior, motion_signal, framerate=3, title='Classified behavior', save_dir=None):
+    """
+    Plots the classified behavior as a color-coded horizontal bar with motion signal and segment durations.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    import numpy as np
+
+    # Create a colormap for behavior classification
+    color_map = {
+        -1: 'purple',  # Twitch
+         0: 'blue',    # Rest
+         1: 'orange',  # Active
+         2: 'cyan'     # Complex motion
+    }
+
+    # Time axis (in seconds)
+    time = np.arange(len(classified_behavior)) / framerate
+
+    # Normalize motion signal
+    motion_signal_norm = (motion_signal - np.min(motion_signal)) / (np.max(motion_signal) - np.min(motion_signal))
+
+    plt.figure(figsize=(10, 2), dpi=300)
+
+    start_idx = 0
+    for i in range(1, len(classified_behavior)):
+        if classified_behavior[i] != classified_behavior[start_idx]:
+            segment_duration = (i - start_idx) / framerate
+            alpha_value = 0.8
+            if classified_behavior[start_idx] == -1:
+                alpha_value = max(0.95, alpha_value)
+            elif classified_behavior[start_idx] == 1:
+                alpha_value = max(0.3, alpha_value)
+            elif classified_behavior[start_idx] == 2:
+                alpha_value = max(0.5, alpha_value)
+
+            plt.bar(time[start_idx:i], np.ones(i - start_idx),
+                    color=color_map[classified_behavior[start_idx]],
+                    width=1/framerate, align='edge', alpha=alpha_value, linewidth=15)
+            
+            start_idx = i
+
+    # Plot the **last segment** after the loop
+    segment_duration = (len(classified_behavior) - start_idx) / framerate
+    alpha_value = 0.8
+    if classified_behavior[start_idx] == -1:
+        alpha_value = max(0.95, alpha_value)
+    elif classified_behavior[start_idx] == 1:
+        alpha_value = max(0.3, alpha_value)
+    elif classified_behavior[start_idx] == 2:
+        alpha_value = max(0.5, alpha_value)
+
+    plt.bar(time[start_idx:], np.ones(len(classified_behavior) - start_idx),
+            color=color_map[classified_behavior[start_idx]],
+            width=1/framerate, align='edge', alpha=alpha_value, linewidth=15)
+
+    # Plot motion signal on top
+    plt.plot(time, motion_signal_norm, color='darkgrey', linewidth=1)
+
+    # Labels and title
+    plt.xlabel('Time (s)')
+    plt.ylim(0,1)
+    plt.ylabel('motion_energy')
+    plt.yticks([])
+    plt.title(title)
+
+    # Legend
+    legend_patches = [
+        mpatches.Patch(color=color_map[-1], label='Twitch (-1)'),
+        mpatches.Patch(color=color_map[0], label='Rest (0)'),
+        mpatches.Patch(color=color_map[1], label='Active (1)'),
+        # mpatches.Patch(color=color_map[2], label='Complex (2)'),
+    ]
+    plt.legend(handles=legend_patches, loc='upper right', bbox_to_anchor=(1.2,1.5), fontsize=8, frameon=False)
+    plt.axis('off')
+
+    if save_dir is not None:
+        plt.savefig(save_dir / 'classified_behavior.png', bbox_inches='tight')
+    plt.tight_layout()
+    plt.show()
+    
