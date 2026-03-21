@@ -35,4 +35,5 @@ dependencies:
       - seaborn
       - statsmodels
       - diptest
+      - openpyxl
     
