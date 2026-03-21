@@ -68,10 +68,18 @@ class DraggableTimeline(FigureCanvas):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(0)
 
+            layout = QVBoxLayout(self.busy_overlay)
+            layout.setAlignment(Qt.AlignCenter)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(12)  # 👈 add spacing instead of stretch chaos
+
             # Optional spinner
             spinner = QLabel(self.busy_overlay)
             spinner.setAlignment(Qt.AlignCenter)
+            spinner.setFixedSize(64, 64)  # 👈 VERY IMPORTANT
             spinner_path = os.path.join(SCRIPT_DIR, 'resources', 'spinner.gif')
+            
+            
             if os.path.exists(spinner_path):
                 try:
                     movie = QMovie(spinner_path)
@@ -789,10 +797,13 @@ class MotionAnnotator(QWidget):
         logo_path = os.path.join(SCRIPT_DIR, 'resources', "MouseCraft.png")
         if os.path.exists(logo_path):
             logo_pixmap = QPixmap(logo_path)
-            logo_label.setPixmap(logo_pixmap.scaledToWidth(300, Qt.SmoothTransformation))
+            scaled = logo_pixmap.scaled(280, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(scaled)
         else:
             logo_label.setText("<b>MouseCraft</b>")
             logo_label.setStyleSheet("font-size: 32px; font-weight: bold; color: #333;")
+        logo_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        logo_label.setMaximumHeight(120)
         main_layout.addWidget(logo_label)
         content_layout = QHBoxLayout()
 
@@ -888,10 +899,6 @@ class MotionAnnotator(QWidget):
         self.loop_btn.setMinimumHeight(34)
         self.pause_btn.setMinimumHeight(34)
         self.stop_btn.setMinimumHeight(34)
-        # Diagnostic widgets recouvrants
-        for child in self.findChildren(QWidget):
-            if child is not self.pause_btn and child.geometry().intersects(self.pause_btn.geometry()):
-                print("Widget potentiellement recouvrant :", child, "visible ?", child.isVisible(), "geometry :", child.geometry())
 
         # Connexions
         self.play_btn.clicked.connect(self.play)
@@ -1255,14 +1262,23 @@ class MotionAnnotator(QWidget):
         self.main_splitter = QSplitter(Qt.Horizontal)
         left_widget = QWidget()
         left_widget.setLayout(left_panel)
-        left_widget.setMinimumWidth(300)
+        left_widget.setMinimumWidth(380)
         self.main_splitter.addWidget(left_widget)
         right_widget = QWidget()
         right_widget.setLayout(right_panel)
-        self.main_splitter.addWidget(right_widget)
-        self.main_splitter.setSizes([850, 750])  # Réactivé pour une séparation visuelle comme avant
+        right_widget.setMinimumWidth(400)
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right_widget)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.main_splitter.addWidget(right_scroll)
+        self.main_splitter.setSizes([700, 600])
+        self.main_splitter.setStretchFactor(0, 1)
+        self.main_splitter.setStretchFactor(1, 1)
         content_layout.addWidget(self.main_splitter)
-        main_layout.addLayout(content_layout)
+        main_layout.addLayout(content_layout, 1)
         self.setLayout(main_layout)
         # Manual-only mode flags (when only raw motion is loaded)
         self.manual_mode_primary = False

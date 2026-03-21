@@ -118,6 +118,9 @@ See here:
 
 You can choose to adjust the filter thresholds according to your usecase. Generally the annotation will first binarise the signal into 0-1 or Rest-Arousal states (recommended threshold for bimodal distributions: Otsu) and in a second step will proceed to detect smaller events embedded within the 0/Rest period (twitches or complex other movements) that can be interpreted according to your usecase. For example, if your signal is eye motion then the small fast transient changes in motion could be sleep-related fast eye movements. This second step offers a choice between thresholds: Li, Otsu, MAD, 95 percentile, mean+SD (from more to more permissive, Li is recommended for long-tailed distributions).
 
+*fps: video original framerate 
+*average factor : smoothing factor for classifying motion energy. In our recordings we average to 3 fps, for example average factor is 10 for 30 Hz fps. This will affect the classification accuracy with an optimal smoothing value balancing between TP and FPs.
+
 <img width="279" height="290" alt="image" src="https://github.com/user-attachments/assets/881c343d-3475-4c76-9670-99faa38cb5cf" />
 
 Last, load your behavioral video recording in .avi or .mp4. Now you can inspect video and annotations in synch and validate accordingly.
@@ -136,7 +139,7 @@ If you did not compute motion_energy yet, you can do so within the notebook by s
 
 -dataset_id
   - camera_processed
-  - mouse_video.tif 
+  - mouse_video.avi or .tif 
 
 ## Using the GUI
 
