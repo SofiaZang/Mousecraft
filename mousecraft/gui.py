@@ -76,7 +76,6 @@ class DraggableTimeline(FigureCanvas):
             # Optional spinner
             spinner = QLabel(self.busy_overlay)
             spinner.setAlignment(Qt.AlignCenter)
-            spinner.setFixedSize(64, 64)  # 👈 VERY IMPORTANT
             spinner_path = os.path.join(SCRIPT_DIR, 'resources', 'spinner.gif')
             
             
