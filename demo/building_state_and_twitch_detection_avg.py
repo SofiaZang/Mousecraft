@@ -13,6 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import tifffile
+import cv2
 from skimage import filters
 from scipy.ndimage import label
 from scipy.signal import savgol_filter
@@ -59,13 +60,16 @@ rcParams['font.size'] = 15
 rcParams['axes.spines.top'] = False
 rcParams['axes.spines.right'] = False
 rcParams['figure.autolayout'] = True
+rcParams['agg.path.chunksize'] = 10000  # reduce path complexity to avoid OOM in draw_path
 
 def mkdir(path):
     if not os.path.exists(path): os.makedirs(path)
     return path
 
-# Default data path and dataset (can be overridden by external motion energy)
-data_path = r'C:\Users\zaggila\Documents\pixelNMF\data_proc\cells'
+data_path = rf'C:\Users\zaggila\Documents\pixelNMF\data_proc\cells'
+# sessions = sorted([f for f in os.listdir(data_path) if f.endswith('_cell_control')])
+# print(f'All sessions: {sessions}')
+
 ds = 'sz105\\2025_05_30_a'
 
 subject_path = os.path.join(data_path, ds)  # default subject path
@@ -73,26 +77,33 @@ movie_path = os.path.join(subject_path, 'cam_crop.tif')
 
 # Optional: allow external motion energy path via CLI argument
 external_me_path = None
+video_input_path = None  # allow passing a video path (tif/tiff/avi) via CLI
 # Optional method overrides via CLI (positional):
-# argv[1] = motion_energy.npy (optional)
+# argv[1] = motion_energy.npy OR video path (optional)
 # argv[2] = binary method (one of: otsu, li, mean_sd)
 # argv[3] = twitch method (one of: li, mad, percentile_95, mean_3sd, otsu)
+# Optional flags:
+#   --no-plots
+#   --fps <raw_fps_number>
 binary_method = 'otsu'
 twitch_method = 'li'
+# Optional frame range selection (start inclusive, end exclusive in original frame index space)
+start_frame = None
+end_frame = None
 if len(sys.argv) > 1 and isinstance(sys.argv[1], str):
     candidate = sys.argv[1]
-    if os.path.exists(candidate) and candidate.lower().endswith('.npy'):
-        external_me_path = os.path.abspath(candidate)
-        # If external motion energy provided, override subject/save dirs to that file's folder
-        subject_path = os.path.dirname(external_me_path)
-        movie_path = None  # not used in this mode
-    elif os.path.exists(candidate) and (candidate.lower().endswith(('.tif', '.tiff', '.avi', '.mp4', '.mov', '.mkv', '.m4v', '.mpg', '.mpeg', '.wmv', '.webm', '.flv'))):
-        # If video/TIFF file provided, use its directory as subject_path and file as movie_path
-        movie_path = os.path.abspath(candidate)
-        subject_path = os.path.dirname(movie_path)
-        print(f"Using video/TIFF file: {movie_path}")
-        print(f"Output directory: {subject_path}")
-    # If first arg is not a path, treat it as method (allow calling without ME path)
+    if os.path.exists(candidate):
+        lc = candidate.lower()
+        if lc.endswith('.npy'):
+            external_me_path = os.path.abspath(candidate)
+            subject_path = os.path.dirname(external_me_path)
+            movie_path = None
+        elif lc.endswith(('.tif', '.tiff', '.avi')):
+            video_input_path = os.path.abspath(candidate)
+            subject_path = os.path.dirname(video_input_path)
+            movie_path = video_input_path
+        else:
+            pass
     elif sys.argv[1].lower() in {'otsu','li','mean_sd'}:
         binary_method = sys.argv[1].lower()
 if len(sys.argv) > 2:
@@ -105,6 +116,27 @@ if len(sys.argv) > 3:
     arg3 = sys.argv[3].lower()
     if arg3 in {'mad','percentile_95','mean_3sd','li','otsu'}:
         twitch_method = arg3
+
+# # Parse optional flags
+# raw_fps = None
+# if '--fps' in sys.argv:
+#     try:
+#         idx = sys.argv.index('--fps')
+#         raw_fps = float(sys.argv[idx + 1])
+#     except Exception:
+#         raw_fps = None
+# if '--start' in sys.argv:
+#     try:
+#         idx = sys.argv.index('--start')
+#         start_frame = int(sys.argv[idx + 1])
+#     except Exception:
+#         start_frame = None
+# if '--end' in sys.argv:
+#     try:
+#         idx = sys.argv.index('--end')
+#         end_frame = int(sys.argv[idx + 1])
+#     except Exception:
+#         end_frame = None
 
 # Parse additional arguments with proper flag handling
 start_frame = None
@@ -149,6 +181,7 @@ framerate = 3  # (avg!) Hz fallback
 if fps_override is not None:
     original_framerate = fps_override
     avg_block_size = avg_factor if avg_factor is not None else 5
+    avg_block = avg_block_size
     averaged_framerate = original_framerate / avg_block_size
     framerate = averaged_framerate
     
@@ -175,7 +208,7 @@ else:  # Low averaged framerate (<5Hz)
 print(f"Smoothing category: {smoothing_category}")
 print(f"Window range: {min_window_secs}-{max_window_secs} seconds") 
 
-scaling_factor = 5 # for matching back to original time
+scaling_factor = avg_block_size # for matching back to original time
 
 active_motion_duration_min = framerate * 1 # 1 sec 
 long_active_motion_duration_min = framerate * 3 # at least 3 seconds to be considered a long awake motion eg run 
@@ -191,7 +224,7 @@ save_dir_videography = Path(save_dir_videography)
 
 # # Compute/Load motion energy
 
-def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=None):
+def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=None, start_frame=None, end_frame=None):
     """
     Compute motion energy from a multi-frame TIFF movie of mouse movement.
 
@@ -215,66 +248,133 @@ def compute_motion_energy(movie_path=None, xrange=None, yrange=None, save_path=N
 
         raise ValueError('Please provide the tiff for the initial run') 
     
-    # Load the TIFF movie (multi-frame TIFF)
-    movie = tifffile.imread(movie_path)
-    num_frames, height, width = movie.shape
+    # Handle TIFF stacks and AVI videos
+    ext = os.path.splitext(movie_path)[1].lower()
+    if ext in ('.tif', '.tiff'):
+        # Stream frames to avoid loading entire stack into RAM
+        with tifffile.TiffFile(movie_path) as tif:
+            pages = tif.pages
+            num_frames = len(pages)
+            first = pages[0].asarray()
+            height, width = first.shape
+            print(f'Loaded TIFF (streaming) with {num_frames} frames, height={height}, width={width}')
 
-    print(f'Loaded movie with {num_frames} frames, height={height}, width={width}')
+            # Determine iteration bounds (compute diff for i in [iter_start, iter_end])
+            iter_start = 1 if not start_frame or start_frame < 1 else min(start_frame, num_frames - 1)
+            iter_end = (num_frames - 1) if not end_frame else min(end_frame - 1, num_frames - 1)
+            if iter_end < iter_start:
+                iter_end = iter_start
 
-    # Initialize motion energy array
-    motion_energy = np.zeros(num_frames)
-    img_prev = movie[0]
+            me_values = []
+            img_prev = pages[iter_start - 1].asarray().astype(np.float32)
+            for i in range(iter_start, iter_end + 1):
+                img = pages[i].asarray().astype(np.float32)
+                diff = img - img_prev
+                me_values.append(float(np.sum(diff * diff)))
+                img_prev = img
+                if i % 1000 == 0:
+                    print(f'Done computing for {i}/{num_frames} frames')
+            motion_energy = np.array(me_values, dtype=np.float64)
+    elif ext == '.avi':
+        cap = cv2.VideoCapture(movie_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Failed to open video: {movie_path}")
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # Determine iteration bounds
+        iter_start = 1 if not start_frame or start_frame < 1 else min(start_frame, total - 1)
+        iter_end = (total - 1) if not end_frame else min(end_frame - 1, total - 1)
+        if iter_end < iter_start:
+            iter_end = iter_start
 
-    # Iterate over the frames and compute motion energy
-    for i in range(1, num_frames):
-        img = movie[i]
+        # Seek to iter_start - 1
+        target_prev = iter_start - 1
+        if target_prev > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target_prev)
+        ret, frame_prev = cap.read()
+        if not ret:
+            cap.release()
+            raise RuntimeError("Failed to read frame for initialization")
+        frame_prev = cv2.cvtColor(frame_prev, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        me_values = []
+        i = iter_start
+        while i <= iter_end:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            diff = gray - frame_prev
+            me_values.append(float(np.sum(diff * diff)))
+            frame_prev = gray
+            if i % 1000 == 0:
+                print(f'Done computing for {i}/{total} frames')
+            i += 1
+        cap.release()
+        motion_energy = np.array(me_values, dtype=np.float64)
+        print(f'Loaded AVI with {len(motion_energy)} ME frames in selected range')
+    else:
+        raise ValueError(f"Unsupported video format: {ext}")
 
-        # Compute motion energy as squared differences between consecutive frames
-        diff = img - img_prev
-        squared_diff = diff ** 2
-        motion_energy[i] = np.sum(squared_diff)
-
-        # Update img_prev for the next iteration
-        img_prev = img
-
-        # Print progress every 1000 frames
-        if i % 1000 == 0:
-            print(f'Done computing for {i}/{num_frames} frames')
-    
     # Normalize motion energy
-    motion_energy = motion_energy[1:]  # Skip the first frame (no previous frame to compare)
-    motion_energy /= np.max(motion_energy)
-    
+    if motion_energy.size > 0:
+        maxv = np.max(motion_energy)
+        if maxv > 0:
+            motion_energy = motion_energy / maxv
+
+    # Save to disk for reuse
+    if save_path is not None:
+        try:
+            os.makedirs(save_path, exist_ok=True)
+            # Avoid overwriting full ME if a subset was computed
+            if start_frame is None and end_frame is None:
+                out_name = 'motion_energy.npy'
+            else:
+                s = 0 if start_frame is None else start_frame
+                e = 'end' if end_frame is None else end_frame
+                out_name = f'motion_energy_subset_{s}_{e}.npy'
+            np.save(os.path.join(save_path, out_name), motion_energy)
+            print(f"Saved {out_name} to {save_path}")
+        except Exception as e:
+            print(f"Warning: could not save motion energy: {e}")
+
     return motion_energy
 
 # Load motion energy: prefer external path if provided, else compute from video
 if external_me_path is not None:
     print(f"Loading external motion energy: {external_me_path}")
     motion_energy_orig = np.load(external_me_path)
+    # Apply optional slicing on external ME
+    if start_frame is not None or end_frame is not None:
+        s = 0 if start_frame is None else max(0, start_frame)
+        e = None if end_frame is None else max(s, end_frame)
+        motion_energy_orig = motion_energy_orig[s:e]
+        print(f"Using ME slice [{s}:{e}] -> length {len(motion_energy_orig)}")
 else:
-    motion_energy_orig = compute_motion_energy(movie_path=movie_path, xrange=None, yrange=None, save_path=subject_path)
+    # If a video path was passed via CLI, prefer that; otherwise use default movie_path
+    chosen_movie = video_input_path if video_input_path is not None else movie_path
+    motion_energy_orig = compute_motion_energy(
+        movie_path=chosen_movie,
+        xrange=None,
+        yrange=None,
+        save_path=os.path.dirname(chosen_movie) if chosen_movie else subject_path,
+        start_frame=start_frame,
+        end_frame=end_frame
+    )
 
-# Apply start/end frame cropping if specified
-if start_frame is not None or end_frame is not None:
-    original_length = len(motion_energy_orig)
-    start = start_frame if start_frame is not None else 0
-    end = end_frame if end_frame is not None else original_length
-    
-    # Validate bounds
-    if start < 0:
-        start = 0
-    if end > original_length:
-        end = original_length
-    if start >= end:
-        raise ValueError(f"Invalid range: start ({start}) must be less than end ({end})")
-    
-    print(f"Cropping motion energy from frames {start} to {end} (original length: {original_length})")
-    motion_energy_orig = motion_energy_orig[start:end]
-    print(f"New motion energy length: {len(motion_energy_orig)}")
+def _pad_to_multiple(data, multiple):
+    data = np.asarray(data)
+    remainder = len(data) % multiple
+    if remainder == 0:
+        return data
+    pad_len = multiple - remainder
+    return np.pad(data, (0, pad_len), mode='edge')
 
+# Preview original ME
 plt.plot(motion_energy_orig)
 plt.show()
 
+# # Load SLEAP output (if computed)
+
+#load sleap output
 
 if is_sleap is True:
     files = os.listdir(subject_path)
@@ -314,15 +414,9 @@ def average_frames(data, avg_block=None):
     print(f'Congrats again! Data is now {len(avg_data)}')
     return avg_data
 
-# Use avg_factor from command line or default to 5
-avg_block_size = avg_factor if avg_factor is not None else 5
-print(f"Using averaging factor: {avg_block_size}")
-
-if len(motion_energy_orig) % 2 != 0: 
-    motion_energy = pad(motion_energy_orig)
-    motion_energy = average_frames(motion_energy, avg_block = avg_block_size)
-else:
-    motion_energy = average_frames(motion_energy_orig, avg_block = avg_block_size)
+# Ensure length is divisible by avg_block before averaging
+motion_energy_ready = _pad_to_multiple(motion_energy_orig, avg_block)
+motion_energy = average_frames(motion_energy_ready, avg_block = avg_block)
 
 length_acts = len(motion_energy)
 # for plotting xticks to seconds
@@ -340,28 +434,22 @@ def signaltonoise(a, axis=0, ddof=0):
 # # Compute SNR (signal to noise ratio) of motion energy & adjust smoothing 
 
 snr = signaltonoise(motion_energy)
-print(snr) 
+print(snr)
+
+min_window_secs = 3  # minimal smoothing in seconds
+max_window_secs = 15  # maximal smoothing in seconds here 
 
 # Map SNR to window size: higher SNR -> shorter window
-snr = signaltonoise(motion_energy)
-print(f"Raw SNR: {snr}")
 snr = np.clip(snr, 0.1, 10)  # avoid divide-by-zero or extremes
-print(f"Clipped SNR: {snr}")
 snr_norm = (10 - snr) / 9.9  # normalize to [0, 1]
-print(f"SNR norm: {snr_norm}")
 adaptive_window_secs = min_window_secs + snr_norm * (max_window_secs - min_window_secs)
-print(f"Adaptive window secs: {adaptive_window_secs}")
 adaptive_window_length = int(adaptive_window_secs * framerate)
-print(f"Adaptive window length (raw): {adaptive_window_length}")
-print(f"Framerate used: {framerate}")
 
 # Ensure odd and >= polyorder+2
 polyorder = 3
 if adaptive_window_length % 2 == 0:
     adaptive_window_length += 1
 adaptive_window_length = max(adaptive_window_length, polyorder + 3)
-
-print(f"Final adaptive window length: {adaptive_window_length}")
 
 print(f"Adaptive window length: {adaptive_window_length}")
 
@@ -571,7 +659,8 @@ def compute_thresholds_for_twitch(motion_signal, save_dir=None, plot=True):
 
     return threshold_motion_mean_sd, threshold_motion_li, threshold_motion_otsu, threshold_mad, threshold_95
 
-# Binary state detection (active vs rest)
+# --- Binary state detection (active vs rest) ---
+# Compute candidate thresholds on smoothed motion energy
 threshold_motion_mean_sd, threshold_motion_li, threshold_motion_otsu = \
     compute_thresholds_for_bin_state_detection(smoothed_motion_energy, 
                                                title='stat_thresholds_for_bin_state_detection', 
@@ -621,7 +710,7 @@ has_active_motion, bin_motion_energy, inds_active_state, inds_rest_state = \
 active_motion_onsets = get_onsets(bin_motion_energy)
 active_motion_offsets = get_offsets(bin_motion_energy)
 
-# Twitch candidate selection on rest periods
+# --- Twitch candidate selection on rest periods ---
 rest_inds = np.where(bin_motion_energy == 0)[0]
 rest_period = motion_energy[rest_inds] if len(rest_inds) > 0 else np.array([])
 
@@ -633,7 +722,7 @@ else:
     twitch_threshold_motion_mean_sd = twitch_threshold_motion_li = twitch_threshold_motion_otsu = None
     threshold_mad = threshold_95 = None
 
-# Choose twitch threshold - always respect user's choice
+# Choose twitch threshold from user method or heuristic default
 if twitch_method == 'li' and twitch_threshold_motion_li is not None:
     twitch_threshold = twitch_threshold_motion_li
 elif twitch_method == 'mad' and threshold_mad is not None:
@@ -716,13 +805,18 @@ bin_twitch_unfilt = binarise_twitch(motion_energy, inds_twitches_filtered_step2)
 # Keep an alias for downstream classification that expects the unfiltered twitch binary
 bin_putative_twitch = bin_twitch_unfilt
 
-# Define onset and offset of twitch
+# 
+# # Define onset and offset of twitch
+
 active_onsets = get_onsets(bin_motion_energy)
 active_offsets = get_offsets(bin_motion_energy)
 twitch_onsets = get_onsets(bin_twitch_unfilt)
 twitch_offsets = get_offsets(bin_twitch_unfilt)
 
-# Plot interval between twitches
+# # Plot interval between twitches (if burst - remove ?)
+
+# iti.min() #/framerate # 2*1/framerate = 0.66*2= 0.13 (133 ms)
+
 iti = np.diff(twitch_onsets/framerate)
 
 plt.figure(figsize=(5,5))
@@ -783,7 +877,7 @@ def plot_detected_twitches(
 
     Parameters:
     - motion_energy: Raw motion energy signal.
-    - smoothed_motion_energy: Smoothed motion energy signal.
+    - smoothed motion energy: Smoothed motion energy signal.
     - threshold_twitches: Threshold for twitch detection.
     - threshold_motion_energy: Threshold for binary motion energy.
     - inds_twitches: Indices where twitch segments start (onsets).
@@ -792,7 +886,7 @@ def plot_detected_twitches(
     - save_dir_videography: Optional directory to save the figure.
     """
     
-    fig, axs = plt.subplots(2, 1, figsize=(15, 7), dpi=300)
+    fig, axs = plt.subplots(2, 1, figsize=(15, 7), dpi=150)
 
     # Plot raw and smoothed motion energy
     axs[0].plot(motion_energy, color='orange', linewidth=2, label='mot_en')
@@ -810,22 +904,9 @@ def plot_detected_twitches(
     # Plot raw motion energy and binary motion energy (including twitch detection)
     axs[1].plot(motion_energy, color='blue', linewidth=1, label='mot_en')
     axs[1].plot(trio_motion_energy, color='darkorange', linewidth=1, label='3 states on mot_en')
-    axs[1].axhline(y=threshold_twitches, color='red', linestyle='--', label='twitch threshold')
-    axs[1].set_xticks(ticks=frame_ticks)
-    axs[1].set_xticklabels(second_ticks, fontsize=12)
-    axs[1].set_xlabel('Time (s)', fontsize=15)
-    # axs[1].set_title('Twitch detection', fontsize=18)
 
-    # Adjust layout and save the plot
-    plt.subplots_adjust(hspace=0.6)
 
-    if save_dir_videography:
-        plt.savefig(save_dir / 'trio_motion_energy_including_twitches.png')
-        print(f"Plot saved to: {save_dir / 'trio_motion_energy_including_twitches.png'}")
-
-    plt.show()
-
-plot_detected_twitches(
+    plot_detected_twitches(
     motion_energy=motion_energy,
     smoothed_motion_energy=smoothed_motion_energy,
     bin_motion_energy=bin_motion_energy,
@@ -842,6 +923,7 @@ n_active_motions = len(active_motion_segments)
 
 print(f"Total active/awake motions detected: {n_active_motions}")
 print(f"Total twitches detected: {n_twitches}")
+
 
 # # Final annotated motion 
 
