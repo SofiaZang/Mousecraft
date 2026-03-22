@@ -300,6 +300,20 @@ Same information but each line is a frame (in same format as input .csv) and thi
 
 Validation_MF file can be loaded as an input to the GUI when you are continuing a pending validation. 
 
+### 📄 Frame-wise Behavioral Data Format
+
+This dataset stores behavioral and motion-related signals at the **frame level**. Each row corresponds to a single timepoint (frame) and includes both continuous and binarized features.
+
+| Column          | Description                                                                  |
+| --------------- | ---------------------------------------------------------------------------- |
+| `frame_idx`     | Index of the frame (timepoint) in the recording                              |
+| `motion_energy` | Continuous measure of movement intensity                                     |
+| `active`        | Binary indicator of active movement (`1` = active, `0` = inactive)           |
+| `twitch`        | Binary indicator of twitch events (`1` = twitch detected)                    |
+| `other`         | Binary indicator of other types of validated movements                       |
+| `status`        | Annotation status (e.g., `edited`, `accepted`, or pending if unreviewed)     |
+| `score`         | Score for the labeled event                                                  |
+
 #### Other outputs:
 
 <img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
