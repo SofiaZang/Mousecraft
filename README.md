@@ -116,10 +116,14 @@ See here:
 
 <img width="722" height="580" alt="image" src="https://github.com/user-attachments/assets/ea4eb917-f058-4307-89ee-abae05492681" />
 
+`Select source`: You can load an .avi or .tif movie, compute motion energy and classify or load your precomputed motion energy and proceed directly to the classification step.
+
+`Thresholds`:
 You can choose to adjust the filter thresholds according to your usecase. Generally the annotation will first binarise the signal into 0-1 or Rest-Arousal states (recommended threshold for bimodal distributions: Otsu) and in a second step will proceed to detect smaller events embedded within the 0/Rest period (twitches or complex other movements) that can be interpreted according to your usecase. For example, if your signal is eye motion then the small fast transient changes in motion could be sleep-related fast eye movements. This second step offers a choice between thresholds: Li, Otsu, MAD, 95 percentile, mean+SD (from more to more permissive, Li is recommended for long-tailed distributions).
 
-*fps: video original framerate 
-*average factor : smoothing factor for classifying motion energy. In our recordings we average to 3 fps, for example average factor is 10 for 30 Hz fps. This will affect the classification accuracy with an optimal smoothing value balancing between TP and FPs.
+`fps`: video original framerate 
+
+`average factor` : smoothing factor for classifying motion energy. In our recordings we average to 3 fps, for example average factor is 10 for 30 Hz fps. This will affect the classification accuracy with an optimal smoothing value balancing between TP and FPs.
 
 <img width="279" height="290" alt="image" src="https://github.com/user-attachments/assets/881c343d-3475-4c76-9670-99faa38cb5cf" />
 
@@ -131,15 +135,15 @@ Else, you can independently run the 'demonstration_classifier.ipynb' notebook an
 
 The notebook will look for the following configuration:
 
--dataset_id
-  - camera_processed
-    - 'motion_energy.npy'
+-`dataset_id`
+  - `camera_processed`
+    - `motion_energy.npy`
 
 If you did not compute motion_energy yet, you can do so within the notebook by setting the 'movie_path' variable to your behavioral video (.tiff). 
 
--dataset_id
-  - camera_processed
-  - mouse_video.avi or .tif 
+`dataset_id`
+  - `camera_processed`
+  - `mouse_video`.avi or .tif 
 
 ## Using the GUI
 
@@ -162,9 +166,9 @@ Main video window: Displays the loaded video of the mouse behavior. Shows frame-
 
 #### Playback Controls
 
-Play ▶: Starts playing the video from the current frame at the defined FPS.
-Pause ⏸: Pauses playback but keeps the current frame in view.
-Stop ⏹: Stops playback and resets to frame 0.
+`Play` ▶: Starts playing the video from the current frame at the defined FPS.
+`Pause` ⏸: Pauses playback but keeps the current frame in view.
+`Stop` ⏹: Stops playback and resets to frame 0.
 
 #### FPS Control
 Textbox (FPS): Defines frames per second for playback speed (e.g., enter 5 for 5 fps). By default the movie will play at 1 fps.
@@ -220,19 +224,19 @@ Event Type: Filter events by type (All, Active, Twitch). This allows you to navi
 Event Status: Filter events by validation status (All, Accepted, Rejected, Edited, Manually Added, Pending). Same as above, navigate only in the status of interest events.
 
 #### Navigation Buttons
-← Prev Onset / Next Onset →: Move between annotated events based on current filters.
+← `Prev Onset` / `Next Onset` →: Move between annotated events based on current filters.
 
 #### Validation Controls
 
-✓ Accept: Marks event as accepted.
+✓ `Accept`: marks event as accepted.
 
-✎ Edit: Allows manual editing of event onset/offset frames. If you only change the offset, a message will appear asking you if you accept the given defined onset or want to change it also.
+✎ `Edit`: Allows manual editing of event onset/offset frames. If you only change the offset, a message will appear asking you if you accept the given defined onset or want to change it also.
 
-✗ Reject: Marks event as rejected. This event then disappears.
+✗ `Reject`: Marks event as rejected. This event then disappears.
 
-Change Type: Changes an event’s type (e.g., Twitch → Active).
+`Change Type`: Changes an event’s type (e.g., Twitch → Active).
 
-↩ Undo: Reverts the last validation action.
+↩ `Undo`: Reverts the last validation action.
 
 ### Manual Event Addition
 
@@ -243,6 +247,7 @@ Dropdown to choose event type (by default Twitch, Active, Complex) for manual an
 Tip: In case you have made some mistake and an event overlaps with another, an error message appears before save.
 
 #### Add a Type: 
+
 If the type of motion you want to annotate is different than the default options, you can add the movement type of interest.
 You can name the type and choose a color for it. This tape will now appear in every dropdown menu (event type of manual edition and onset navigation). 
 
@@ -252,22 +257,38 @@ Spinboxes to manually enter frame numbers for onset and offset of new events.
 
 #### Set Current Frame
 
-Buttons to set the current video frame as onset or offset.
+Buttons to set the current video frame as onset or offset when manually editing an event.
 
 #### Add Event
 
 Adds the new event to the annotation timeline. If the added or edited event overlaps fully with another event, the automatic event will be rejected and this new addition will be saved.
 
 #### Edit Threshold (frames)
-This matters for accuracy tracking. Sets the frame tolerance used when classifying edited events (e.g., 5 means ±5 frames from original is considered “minor edit” the event status in the output file is edited but the dot is Green and the score is +1). This can be adjusted per user if you are interested to evaluate the automatic annotation's performance. (If for example the signal is averaged 5 times, we keep the tolerance at 5 frames).
+
+This matters for performance tracking. Sets the tolerance to score how well the automatic classifier performs (e.g., 5 means ±5 frames from original is considered “minor difference” and while the event status in the output file is Edited, the score is +1). This can be adjusted per user if you are interested to evaluate the automatic annotation's performance. (If for example the signal is averaged 5 times, we keep the tolerance at 5 frames).
 
 ## Mousecraft outputs
 
 ### Main outputs:
 
-Mousecraft currently outputs 2 main outputs in .npy and .csv format:
+Mousecraft currently outputs:
+
+`validation_HF.xlsx` 
+`validation_MF.xlsx`
+`final_classification_plot_final.png`
+`validation_comparison_plot_final.png`
 
 #### validation_HF (Human Friendly) 
+
+Stores annotated behavioral events with status pending if not all events have been validated, else each event has a corresponding status. Each row represents a single event with the following structure:
+
+| Column       | Description                                           |
+| ------------ | ----------------------------------------------------- |
+| `onset`      | Start time (or frame index) of the event              |
+| `offset`     | End time (or frame index) of the event                |
+| `event_type` | Type of event (e.g., `twitch`, `active`, `rest`, `other`)      |
+| `status`     | Annotation status (e.g., `edited`, `rejected`, `accepted`, `pending` if not validated yet) |
+| `score`      | Scores how well the automatic annotations match the validated ones  (float value)|
 
 <img width="405" height="408" alt="image" src="https://github.com/user-attachments/assets/c1f9091c-c0a4-4ae8-a4fb-ffb35b05265a" />
 
@@ -277,10 +298,11 @@ Mousecraft currently outputs 2 main outputs in .npy and .csv format:
 
 Same information but each line is a frame (in same format as input .csv) and this is the input you can reload when you continue validating from _pending.
 
+Validation_MF file can be loaded as an input to the GUI when you are continuing a pending validation. 
+
 #### Other outputs:
 
 <img width="506" height="300" alt="image" src="https://github.com/user-attachments/assets/3e00e065-4ced-4398-ae6f-fbb022ae08c9" />
-
 
 and also 2 .pngs and .json that showcase the overall performance of mousecraft validation
 
