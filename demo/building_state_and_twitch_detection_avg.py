@@ -66,10 +66,8 @@ def mkdir(path):
     if not os.path.exists(path): os.makedirs(path)
     return path
 
-data_path = rf'C:\Users\zaggila\Documents\pixelNMF\data_proc\cells'
-# sessions = sorted([f for f in os.listdir(data_path) if f.endswith('_cell_control')])
-# print(f'All sessions: {sessions}')
-
+# Default data path and dataset (can be overridden by external motion energy)
+data_path = r'C:\Users\zaggila\Documents\pixelNMF\data_proc\cells'
 ds = 'sz105\\2025_05_30_a'
 
 subject_path = os.path.join(data_path, ds)  # default subject path
@@ -78,32 +76,29 @@ movie_path = os.path.join(subject_path, 'cam_crop.tif')
 # Optional: allow external motion energy path via CLI argument
 external_me_path = None
 video_input_path = None  # allow passing a video path (tif/tiff/avi) via CLI
+
 # Optional method overrides via CLI (positional):
-# argv[1] = motion_energy.npy OR video path (optional)
+# argv[1] = motion_energy.npy (optional)
 # argv[2] = binary method (one of: otsu, li, mean_sd)
 # argv[3] = twitch method (one of: li, mad, percentile_95, mean_3sd, otsu)
-# Optional flags:
-#   --no-plots
-#   --fps <raw_fps_number>
+
 binary_method = 'otsu'
 twitch_method = 'li'
-# Optional frame range selection (start inclusive, end exclusive in original frame index space)
-start_frame = None
-end_frame = None
+
 if len(sys.argv) > 1 and isinstance(sys.argv[1], str):
     candidate = sys.argv[1]
-    if os.path.exists(candidate):
-        lc = candidate.lower()
-        if lc.endswith('.npy'):
-            external_me_path = os.path.abspath(candidate)
-            subject_path = os.path.dirname(external_me_path)
-            movie_path = None
-        elif lc.endswith(('.tif', '.tiff', '.avi')):
-            video_input_path = os.path.abspath(candidate)
-            subject_path = os.path.dirname(video_input_path)
-            movie_path = video_input_path
-        else:
-            pass
+    if os.path.exists(candidate) and candidate.lower().endswith('.npy'):
+        external_me_path = os.path.abspath(candidate)
+        # If external motion energy provided, override subject/save dirs to that file's folder
+        subject_path = os.path.dirname(external_me_path)
+        movie_path = None  # not used in this mode
+    elif os.path.exists(candidate) and (candidate.lower().endswith(('.tif', '.tiff', '.avi', '.mp4', '.mov', '.mkv', '.m4v', '.mpg', '.mpeg', '.wmv', '.webm', '.flv'))):
+        # If video/TIFF file provided, use its directory as subject_path and file as movie_path
+        movie_path = os.path.abspath(candidate)
+        subject_path = os.path.dirname(movie_path)
+        print(f"Using video/TIFF file: {movie_path}")
+        print(f"Output directory: {subject_path}")
+    # If first arg is not a path, treat it as method (allow calling without ME path)
     elif sys.argv[1].lower() in {'otsu','li','mean_sd'}:
         binary_method = sys.argv[1].lower()
 if len(sys.argv) > 2:
@@ -116,27 +111,6 @@ if len(sys.argv) > 3:
     arg3 = sys.argv[3].lower()
     if arg3 in {'mad','percentile_95','mean_3sd','li','otsu'}:
         twitch_method = arg3
-
-# # Parse optional flags
-# raw_fps = None
-# if '--fps' in sys.argv:
-#     try:
-#         idx = sys.argv.index('--fps')
-#         raw_fps = float(sys.argv[idx + 1])
-#     except Exception:
-#         raw_fps = None
-# if '--start' in sys.argv:
-#     try:
-#         idx = sys.argv.index('--start')
-#         start_frame = int(sys.argv[idx + 1])
-#     except Exception:
-#         start_frame = None
-# if '--end' in sys.argv:
-#     try:
-#         idx = sys.argv.index('--end')
-#         end_frame = int(sys.argv[idx + 1])
-#     except Exception:
-#         end_frame = None
 
 # Parse additional arguments with proper flag handling
 start_frame = None
@@ -165,6 +139,108 @@ while i < len(sys.argv):
         i += 1
     else:
         i += 1  # skip unknown argument
+
+# data_path = rf'C:\Users\zaggila\Documents\pixelNMF\data_proc\cells'
+# # sessions = sorted([f for f in os.listdir(data_path) if f.endswith('_cell_control')])
+# # print(f'All sessions: {sessions}')
+
+# ds = 'sz105\\2025_05_30_a'
+
+# subject_path = os.path.join(data_path, ds)  # default subject path
+# movie_path = os.path.join(subject_path, 'cam_crop.tif')
+
+# # Optional: allow external motion energy path via CLI argument
+# external_me_path = None
+# video_input_path = None  # allow passing a video path (tif/tiff/avi) via CLI
+
+# # Optional method overrides via CLI (positional):
+# # argv[1] = motion_energy.npy # OR video path (optional)   # test 
+# # argv[2] = binary method (one of: otsu, li, mean_sd)
+# # argv[3] = twitch method (one of: li, mad, percentile_95, mean_3sd, otsu)
+# # Optional flags:
+# #   --no-plots
+# #   --fps <raw_fps_number>
+# binary_method = 'otsu'
+# twitch_method = 'li'
+# # Optional frame range selection (start inclusive, end exclusive in original frame index space)
+# start_frame = None
+# end_frame = None
+
+# if len(sys.argv) > 1 and isinstance(sys.argv[1], str):
+#     candidate = sys.argv[1]
+#     if os.path.exists(candidate):
+#         lc = candidate.lower()
+#         if lc.endswith('.npy'):
+#             external_me_path = os.path.abspath(candidate)
+#             subject_path = os.path.dirname(external_me_path)
+#             movie_path = None
+#         elif lc.endswith(('.tif', '.tiff', '.avi')):
+#             video_input_path = os.path.abspath(candidate)
+#             subject_path = os.path.dirname(video_input_path)
+#             movie_path = video_input_path
+#         else:
+#             pass
+#     elif sys.argv[1].lower() in {'otsu','li','mean_sd'}:
+#         binary_method = sys.argv[1].lower()
+# if len(sys.argv) > 2:
+#     arg2 = sys.argv[2].lower()
+#     if arg2 in {'otsu','li','mean_sd'}:
+#         binary_method = arg2
+#     elif arg2 in {'mad','percentile_95','mean_3sd','li','otsu'}:
+#         twitch_method = arg2
+# if len(sys.argv) > 3:
+#     arg3 = sys.argv[3].lower()
+#     if arg3 in {'mad','percentile_95','mean_3sd','li','otsu'}:
+#         twitch_method = arg3
+
+# # # Parse optional flags
+# # raw_fps = None
+# # if '--fps' in sys.argv:
+# #     try:
+# #         idx = sys.argv.index('--fps')
+# #         raw_fps = float(sys.argv[idx + 1])
+# #     except Exception:
+# #         raw_fps = None
+# # if '--start' in sys.argv:
+# #     try:
+# #         idx = sys.argv.index('--start')
+# #         start_frame = int(sys.argv[idx + 1])
+# #     except Exception:
+# #         start_frame = None
+# # if '--end' in sys.argv:
+# #     try:
+# #         idx = sys.argv.index('--end')
+# #         end_frame = int(sys.argv[idx + 1])
+# #     except Exception:
+# #         end_frame = None
+
+# # Parse additional arguments with proper flag handling
+# start_frame = None
+# end_frame = None
+# fps_override = None
+# avg_factor = None
+# no_plots = False
+
+# i = 4 #♣ test 
+# while i < len(sys.argv):
+#     arg = sys.argv[i]
+#     if arg == '--start' and i + 1 < len(sys.argv):
+#         start_frame = int(sys.argv[i + 1])
+#         i += 2
+#     elif arg == '--end' and i + 1 < len(sys.argv):
+#         end_frame = int(sys.argv[i + 1])
+#         i += 2
+#     elif arg == '--fps' and i + 1 < len(sys.argv):
+#         fps_override = float(sys.argv[i + 1])
+#         i += 2
+#     elif arg == '--avg' and i + 1 < len(sys.argv):
+#         avg_factor = int(sys.argv[i + 1])
+#         i += 2
+#     elif arg == '--no-plots':
+#         no_plots = True
+#         i += 1
+#     else:
+#         i += 1  # skip unknown argument
 
 # set parameters 
 gaussian_sigma = 5

@@ -68,10 +68,17 @@ class DraggableTimeline(FigureCanvas):
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(0)
 
+            layout = QVBoxLayout(self.busy_overlay)
+            layout.setAlignment(Qt.AlignCenter)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(12)  # 👈 add spacing instead of stretch chaos
+
             # Optional spinner
             spinner = QLabel(self.busy_overlay)
             spinner.setAlignment(Qt.AlignCenter)
             spinner_path = os.path.join(SCRIPT_DIR, 'resources', 'spinner.gif')
+            
+            
             if os.path.exists(spinner_path):
                 try:
                     movie = QMovie(spinner_path)
@@ -268,14 +275,18 @@ class DraggableTimeline(FigureCanvas):
                     score = 0.5  # Default for edited events
             elif validation == 'accepted':
                 score = 1
+            elif validation == 'lightly edited':
+                score = 1
             elif validation == 'rejected':
                 score = -1
             elif validation == 'manually added':
                 score = 0
             else:
                 score = 0
-            # Assign color based on score
-            if score == 1:
+            # Assign color based on score and validation
+            if validation == 'lightly edited':
+                color = 'green'  # Light green for lightly edited events
+            elif score == 1:
                 color = 'green'
             elif score == 0.5:
                 color = 'orange'
@@ -561,6 +572,7 @@ class MotionAnnotator(QWidget):
             "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
         ]
 
+        self.create_menu_bar()
         self.init_ui()
         self.setup_timer()
         self.unsaved_changes = False  # Track unsaved changes
@@ -640,6 +652,130 @@ class MotionAnnotator(QWidget):
         except Exception:
             pass
 
+    def create_menu_bar(self):
+        """Create the menu bar with Mousecraft menu"""
+        from PyQt5.QtWidgets import QMenuBar, QAction
+        
+        # Create a menu bar widget
+        menubar = QMenuBar(self)
+        
+        # Create Mousecraft menu
+        mousecraft_menu = menubar.addMenu("Mousecraft")
+        
+        # Add actions to the menu
+        new_project_action = QAction("Create New Project", self)
+        new_project_action.setShortcut("Ctrl+N")
+        new_project_action.setStatusTip("Create a new project")
+        new_project_action.triggered.connect(self.create_new_project)
+        mousecraft_menu.addAction(new_project_action)
+        
+        mousecraft_menu.addSeparator()
+        
+        about_action = QAction("About Mousecraft", self)
+        about_action.setStatusTip("Show information about Mousecraft")
+        about_action.triggered.connect(self.show_about)
+        mousecraft_menu.addAction(about_action)
+        
+        # Add Help menu
+        help_menu = menubar.addMenu("Help")
+        
+        # Add help actions
+        readme_action = QAction("GUI Documentation (GitHub)", self)
+        readme_action.setStatusTip("Open GUI documentation on GitHub")
+        readme_action.triggered.connect(self.open_gui_documentation)
+        help_menu.addAction(readme_action)
+        
+        github_action = QAction("Mousecraft Repository", self)
+        github_action.setStatusTip("Open Mousecraft GitHub repository")
+        github_action.triggered.connect(self.open_github_repo)
+        help_menu.addAction(github_action)
+        
+        help_menu.addSeparator()
+        
+        about_action = QAction("About Mousecraft", self)
+        about_action.setStatusTip("Show information about Mousecraft")
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+        
+        # Store the menu bar as an instance variable
+        self.menubar = menubar
+
+    def create_new_project(self):
+        """Create a new project - opens a new window"""
+        # Create a new instance of MotionAnnotator
+        new_annotator = MotionAnnotator()
+        new_annotator.show()
+        
+        # Optionally center the new window
+        if hasattr(new_annotator, 'move'):
+            new_annotator.move(self.x() + 50, self.y() + 50)
+    
+    def reset_to_new_project(self):
+        """Reset the interface to a new project state"""
+        # Clear current data
+        self.onsets = []
+        self.onset_types = {}
+        self.curated_events = {}
+        self.classified_events = {}
+        self.timeline_canvas.onset_validations = {}
+        self.timeline_canvas.event_offsets = {}
+        if hasattr(self, 'event_status'):
+            self.event_status = {}
+        
+        # Reset video
+        self.video_path = None
+        self.video_label.setText("Load a video to start")
+        self.video_folder_label.setText("")
+        
+        # Reset motion energy
+        self.motion_energy = None
+        self.motion_energy_folder_label.setText("")
+        
+        # Clear timelines by replotting with empty data
+        if hasattr(self.timeline_canvas, 'plot_motion_energy'):
+            self.timeline_canvas.plot_motion_energy([], [], {}, {}, None)
+        if hasattr(self, 'timeline_canvas2') and hasattr(self.timeline_canvas2, 'plot_motion_energy'):
+            self.timeline_canvas2.plot_motion_energy([], [], {}, {}, None)
+        
+        # Reset zoom
+        self.reset_zoom_timeline()
+        self.reset_video_zoom()
+        
+        QMessageBox.information(self, "New Project", "New project created successfully!")
+    
+    def show_about(self):
+        """Show about dialog"""
+        about_text = """
+        <h2>Mousecraft</h2>
+        <p>Version: 1.0</p>
+        <p>A tool for behavioral event classification and validation in mouse videos.</p>
+        <p>Features:</p>
+        <ul>
+            <li>Automatic event classification</li>
+            <li>Manual validation and editing</li>
+            <li>Custom event types</li>
+            <li>Export capabilities</li>
+        </ul>
+        <p>© 2025 Mousecraft Team</p>
+        """
+        QMessageBox.about(self, "About Mousecraft", about_text)
+
+    def open_gui_documentation(self):
+        """Open GUI documentation on GitHub"""
+        import webbrowser
+        try:
+            webbrowser.open("https://github.com/SofiaZang/Mousecraft")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not open documentation: {str(e)}")
+    
+    def open_github_repo(self):
+        """Open Mousecraft GitHub repository"""
+        import webbrowser
+        try:
+            webbrowser.open("https://github.com/SofiaZang/Mousecraft")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not open repository: {str(e)}")
+
     def resizeEvent(self, event):
         try:
             if getattr(self, 'busy_overlay', None) is not None and self.busy_overlay.isVisible():
@@ -650,16 +786,23 @@ class MotionAnnotator(QWidget):
 
     def init_ui(self):
         main_layout = QVBoxLayout()
+        
+        # Add the menu bar at the top
+        main_layout.addWidget(self.menubar)
+        
         # Add MouseCraft logo at the top, centered
         logo_label = QLabel()
         logo_label.setAlignment(Qt.AlignCenter)
         logo_path = os.path.join(SCRIPT_DIR, 'resources', "MouseCraft.png")
         if os.path.exists(logo_path):
             logo_pixmap = QPixmap(logo_path)
-            logo_label.setPixmap(logo_pixmap.scaledToWidth(300, Qt.SmoothTransformation))
+            scaled = logo_pixmap.scaled(280, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(scaled)
         else:
             logo_label.setText("<b>MouseCraft</b>")
             logo_label.setStyleSheet("font-size: 32px; font-weight: bold; color: #333;")
+        logo_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        logo_label.setMaximumHeight(120)
         main_layout.addWidget(logo_label)
         content_layout = QHBoxLayout()
 
@@ -755,10 +898,6 @@ class MotionAnnotator(QWidget):
         self.loop_btn.setMinimumHeight(34)
         self.pause_btn.setMinimumHeight(34)
         self.stop_btn.setMinimumHeight(34)
-        # Diagnostic widgets recouvrants
-        for child in self.findChildren(QWidget):
-            if child is not self.pause_btn and child.geometry().intersects(self.pause_btn.geometry()):
-                print("Widget potentiellement recouvrant :", child, "visible ?", child.isVisible(), "geometry :", child.geometry())
 
         # Connexions
         self.play_btn.clicked.connect(self.play)
@@ -1015,7 +1154,7 @@ class MotionAnnotator(QWidget):
         filter_layout.addWidget(self.onset_filter_combo)
         filter_layout.addWidget(QLabel("Event status"))
         self.status_filter_combo = QComboBox()
-        self.status_filter_combo.addItems(["All", "Edited", "Pending", "Accepted", "Rejected", "Manually Added"])
+        self.status_filter_combo.addItems(["All", "Edited", "Lightly Edited", "Pending", "Accepted", "Rejected", "Manually Added"])
         self.status_filter_combo.currentIndexChanged.connect(self.update_onset_filter)
         filter_layout.addWidget(self.status_filter_combo)
         onset_layout.addLayout(filter_layout)
@@ -1122,14 +1261,23 @@ class MotionAnnotator(QWidget):
         self.main_splitter = QSplitter(Qt.Horizontal)
         left_widget = QWidget()
         left_widget.setLayout(left_panel)
-        left_widget.setMinimumWidth(300)
+        left_widget.setMinimumWidth(380)
         self.main_splitter.addWidget(left_widget)
         right_widget = QWidget()
         right_widget.setLayout(right_panel)
-        self.main_splitter.addWidget(right_widget)
-        self.main_splitter.setSizes([850, 750])  # Réactivé pour une séparation visuelle comme avant
+        right_widget.setMinimumWidth(400)
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right_widget)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.main_splitter.addWidget(right_scroll)
+        self.main_splitter.setSizes([700, 600])
+        self.main_splitter.setStretchFactor(0, 1)
+        self.main_splitter.setStretchFactor(1, 1)
         content_layout.addWidget(self.main_splitter)
-        main_layout.addLayout(content_layout)
+        main_layout.addLayout(content_layout, 1)
         self.setLayout(main_layout)
         # Manual-only mode flags (when only raw motion is loaded)
         self.manual_mode_primary = False
@@ -1453,10 +1601,8 @@ class MotionAnnotator(QWidget):
                         else:
                             _apply_video_source_choice()
                         self.fps_edit.setEnabled(use_video)
-                        
-                        # FPS setting and averaging: allowed for both sources
+                        # Averaging: allowed for both sources
                         self.avg_edit.setEnabled(True)
-                        self.fps_edit.setEnabled(True)  # user can type FPS manually
                         if self.avg_edit.text().strip() == "":
                             self.avg_edit.setPlaceholderText("enter a positive integer, e.g. 5 (use 1 for no averaging)")
 
@@ -1513,18 +1659,12 @@ class MotionAnnotator(QWidget):
             dlg = ThresholdDialog(self)
             if dlg.exec_() != QDialog.Accepted:
                 return
-            
-            # trial 
             # Build args
             args = [sys.executable, script_path]
-
             # Source selection
             me_path = getattr(self, 'motion_energy_path', None)
             selected_input_choice = dlg.video_source_combo.currentText() if hasattr(dlg, 'video_source_combo') else None
             self._last_selected_input_choice = selected_input_choice
-
-            input_file = None
-
             if dlg.radio_me.isChecked():
                 # Explicitly honor selected ME path per input
                 use_me = None
@@ -1536,51 +1676,40 @@ class MotionAnnotator(QWidget):
                 if not use_me:
                     use_me = me_path
                 if use_me and os.path.exists(use_me):
-                    input_file = use_me
+                    args.append(use_me)
                 else:
-                    QMessageBox.critical(
-                        self, "Missing Motion Energy",
-                        "No Motion Energy file found for the selected input. Load it first or select the other input."
-                    )
+                    QMessageBox.critical(self, "Missing Motion Energy", "No Motion Energy file found for the selected input. Load it first or select the other input.")
                     return
             else:
-                # Video path
+                # Use the path shown in the dialog (reflects Input 1/2/custom choice)
                 video_path = dlg.video_path_edit.text().strip()
                 if video_path:
-                    input_file = video_path
-                else:
-                    QMessageBox.critical(self, "Missing video", "Select a video file or motion energy to process.")
-                    return
-
-            # Add the input file as first positional argument
-            args.append(input_file)
-
-            # Thresholds (positional)
+                    args.append(video_path)
+            # Append threshold choices as positional args expected by the script
             chosen_binary = dlg.binary_combo.currentText()
             chosen_twitch = dlg.twitch_combo.currentText()
+            # Persist choices
+            try:
+                settings = QSettings('Mousecraft', 'Thresholds')
+                settings.setValue('binary_method', chosen_binary)
+                settings.setValue('twitch_method', chosen_twitch)
+            except Exception:
+                pass
+            # Add thresholds, optional FPS, and no-plots flag (prevents blocking GUI by plt.show)
             args.extend([chosen_binary, chosen_twitch])
-
-            # FPS is required for both video and ME inputs
             fps_txt = dlg.fps_edit.text().strip()
-            if not fps_txt or not fps_txt.isdigit() or int(fps_txt) <= 0:
-                QMessageBox.critical(
-                self, "Missing FPS",
-                "Please enter the raw acquisition frequency (FPS) for this input, even for motion energy."
-                )
-                return
-            args.extend(['--fps', fps_txt])
-
-            # Averaging factor is mandatory
-            avg_txt = dlg.avg_edit.text().strip()
-            if not avg_txt or not avg_txt.isdigit() or int(avg_txt) < 1:
-                QMessageBox.critical(
-                    self, "Missing averaging value",
-                    "Enter a valid averaging factor (integer >= 1). Use 1 for no averaging."
-                )
+            if fps_txt.isdigit():
+                args.extend(['--fps', fps_txt])
+            # Averaging handling (for both sources)
+            try:
+                avg_txt = dlg.avg_edit.text().strip()
+            except Exception:
+                avg_txt = ''
+            if not (avg_txt.isdigit() and int(avg_txt) >= 1):
+                QMessageBox.critical(self, "Missing averaging value", "Veuillez saisir un facteur de moyenne (entier >= 1).\nEnter an averaging factor in the dialog (use 1 for no averaging).")
                 return
             args.extend(['--avg', avg_txt])
-
-            # Optional start/end frames
+            # Add optional start/end range
             if dlg.radio_part.isChecked():
                 try:
                     s = int(dlg.start_edit.text().strip())
@@ -1588,73 +1717,7 @@ class MotionAnnotator(QWidget):
                     args.extend(['--start', str(s), '--end', str(e)])
                 except Exception:
                     pass
-
-            # Always append no-plots for GUI runs
             args.append('--no-plots')
-
-            # Debug: print args
-            print("Running script with args:", args)
-
-
-            # Build args
-            # args = [sys.executable, script_path]
-            # # Source selection
-            # me_path = getattr(self, 'motion_energy_path', None)
-            # selected_input_choice = dlg.video_source_combo.currentText() if hasattr(dlg, 'video_source_combo') else None
-            # self._last_selected_input_choice = selected_input_choice
-            # if dlg.radio_me.isChecked():
-            #     # Explicitly honor selected ME path per input
-            #     use_me = None
-            #     if isinstance(selected_input_choice, str) and selected_input_choice.startswith('Use Input 2'):
-            #         use_me = getattr(self, 'motion_energy_path2', None)
-            #     elif isinstance(selected_input_choice, str) and selected_input_choice.startswith('Use Input 1'):
-            #         use_me = getattr(self, 'motion_energy_path', None)
-            #     # Fallback to globally selected ME
-            #     if not use_me:
-            #         use_me = me_path
-            #     if use_me and os.path.exists(use_me):
-            #         args.append(use_me)
-            #     else:
-            #         QMessageBox.critical(self, "Missing Motion Energy", "No Motion Energy file found for the selected input. Load it first or select the other input.")
-            #         return
-            # else:
-            #     # Use the path shown in the dialog (reflects Input 1/2/custom choice)
-            #     video_path = dlg.video_path_edit.text().strip()
-            #     if video_path:
-            #         args.append(video_path)
-            # # Append threshold choices as positional args expected by the script
-            # chosen_binary = dlg.binary_combo.currentText()
-            # chosen_twitch = dlg.twitch_combo.currentText()
-            # # Persist choices
-            # try:
-            #     settings = QSettings('Mousecraft', 'Thresholds')
-            #     settings.setValue('binary_method', chosen_binary)
-            #     settings.setValue('twitch_method', chosen_twitch)
-            # except Exception:
-            #     pass
-            # # Add thresholds, optional FPS, and no-plots flag (prevents blocking GUI by plt.show)
-            # args.extend([chosen_binary, chosen_twitch])
-            # fps_txt = dlg.fps_edit.text().strip()
-            # if fps_txt.isdigit():
-            #     args.extend(['--fps', fps_txt])
-            # # Averaging handling (for both sources)
-            # try:
-            #     avg_txt = dlg.avg_edit.text().strip()
-            # except Exception:
-            #     avg_txt = ''
-            # if not (avg_txt.isdigit() and int(avg_txt) >= 1):
-            #     QMessageBox.critical(self, "Missing averaging value", "Veuillez saisir un facteur de moyenne (entier >= 1).\nEnter an averaging factor in the dialog (use 1 for no averaging).")
-            #     return
-            # args.extend(['--avg', avg_txt])
-            # # Add optional start/end range
-            # if dlg.radio_part.isChecked():
-            #     try:
-            #         s = int(dlg.start_edit.text().strip())
-            #         e = int(dlg.end_edit.text().strip())
-            #         args.extend(['--start', str(s), '--end', str(e)])
-            #     except Exception:
-            #         pass
-            # args.append('--no-plots')
 
             # Non-blocking execution with live log dialog
             log_dialog = QDialog(self)
@@ -1814,6 +1877,18 @@ class MotionAnnotator(QWidget):
                     pass
                 if success and loaded_labels:
                     log_view.append("\n✅ Done. mousecraft_auto_labels.csv loaded into the timeline.")
+                    # Crop video to match classification range if applicable
+                    try:
+                        # Get the frame range from the loaded classification data
+                        if hasattr(self, 'input_classification_df') and self.input_classification_df is not None:
+                            df = self.input_classification_df
+                            if 'frame_idx' in df.columns:
+                                start_frame = int(df['frame_idx'].min())
+                                end_frame = int(df['frame_idx'].max()) + 1
+                                self.crop_video_to_classification_range(start_frame, end_frame)
+                                log_view.append(f"\n📹 Video cropped to frames {start_frame}-{end_frame} to match classification.")
+                    except Exception as e:
+                        log_view.append(f"\n⚠️ Warning: Could not crop video to classification range: {e}")
                 elif success:
                     log_view.append("\n✅ Done. Outputs saved in mousecraft_automatic_classifications.")
                 else:
@@ -1833,6 +1908,21 @@ class MotionAnnotator(QWidget):
                             grid.addWidget(QLabel(str(value)), r, 1)
 
                         r = 0
+                        # Add folder information at the top
+                        paths = summary_data.get('paths', {})
+                        parent_folder = paths.get('parent_folder')
+                        grandparent_folder = paths.get('grandparent_folder')
+                        if parent_folder or grandparent_folder:
+                            folder_info = []
+                            if grandparent_folder:
+                                folder_info.append(grandparent_folder)
+                            if parent_folder:
+                                folder_info.append(parent_folder)
+                            folder_title = " > ".join(folder_info)
+                            add_row(r, "Dataset", folder_title); r += 1
+                            # Update main window title
+                            self.setWindowTitle(f"MouseCraft - {folder_title}")
+                        
                         add_row(r, "Mode", summary_data.get('mode')); r += 1
                         snr = summary_data.get('snr'); add_row(r, "SNR", f"{snr:.3f}" if isinstance(snr, (int,float)) else snr); r += 1
                         smooth = summary_data.get('smoothing', {})
@@ -2744,6 +2834,60 @@ class MotionAnnotator(QWidget):
         
     def load_json_classifications(self, fname):
         """Load classifications from JSON format"""
+        import os
+        
+        # Try to load custom colors from multiple sources
+        colors_loaded = False
+        
+        # 1. Try from a separate colors file in the same directory
+        colors_file = os.path.splitext(fname)[0] + '_colors.json'
+        if os.path.exists(colors_file):
+            try:
+                with open(colors_file, 'r') as f:
+                    custom_colors = json.load(f)
+                    # Merge custom colors with existing ones (custom colors take precedence)
+                    if hasattr(self, 'event_type_colors'):
+                        self.event_type_colors.update(custom_colors)
+                    else:
+                        self.event_type_colors = custom_colors
+                    colors_loaded = True
+            except Exception:
+                pass  # If colors file is corrupted, continue without it
+        
+        # 2. Try from the mousecraft_output directory in the same folder
+        if not colors_loaded:
+            try:
+                json_dir = os.path.dirname(fname)
+                output_dir = os.path.join(json_dir, 'mousecraft_output')
+                colors_file = os.path.join(output_dir, 'event_type_colors.json')
+                if os.path.exists(colors_file):
+                    with open(colors_file, 'r') as f:
+                        custom_colors = json.load(f)
+                        if hasattr(self, 'event_type_colors'):
+                            self.event_type_colors.update(custom_colors)
+                        else:
+                            self.event_type_colors = custom_colors
+                        colors_loaded = True
+            except Exception:
+                pass
+        
+        # 3. Try from the output directory if it exists
+        if not colors_loaded and hasattr(self, 'export_path_lineedit'):
+            try:
+                export_path = self.export_path_lineedit.text()
+                if export_path:
+                    colors_file = os.path.join(export_path, 'mousecraft_output', 'event_type_colors.json')
+                    if os.path.exists(colors_file):
+                        with open(colors_file, 'r') as f:
+                            custom_colors = json.load(f)
+                            if hasattr(self, 'event_type_colors'):
+                                self.event_type_colors.update(custom_colors)
+                            else:
+                                self.event_type_colors = custom_colors
+                            colors_loaded = True
+            except Exception:
+                pass
+        
         with open(fname, 'r') as f:
             self.classified_events = json.load(f)
             
@@ -2761,7 +2905,7 @@ class MotionAnnotator(QWidget):
             # Register unseen types: add to available list, assign color, and propagate to canvases
             if etype not in self.available_event_types:
                 self.available_event_types.append(etype)
-                # Assign a color from palette if not present
+                # Only assign color if not already present (preserve custom colors)
                 if etype not in self.event_type_colors:
                     # Pick next palette color not already used
                     used = {c.lower() for c in self.event_type_colors.values()}
@@ -3281,10 +3425,15 @@ class MotionAnnotator(QWidget):
             self.pause()
             
     def show_frame(self, frame_num):
+        # Account for video cropping if applicable
+        actual_frame = frame_num
+        if hasattr(self, 'video_start_frame'):
+            actual_frame = frame_num + self.video_start_frame
+        
         if self.cap is None:
             return
             
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, actual_frame)
         ret, frame = self.cap.read()
         if not ret:
             return
@@ -3417,13 +3566,18 @@ class MotionAnnotator(QWidget):
             ret, frame = self.cap.read()
         
     def get_tiff_frame(self, index):
+        # Account for video cropping if applicable
+        actual_index = index
+        if hasattr(self, 'video_start_frame'):
+            actual_index = index + self.video_start_frame
+            
         # Essaye d'abord via series
         try:
             arr = self.tiff_reader.series[0].asarray()
-            frame = arr[index]
+            frame = arr[actual_index]
         except Exception:
             # fallback simple : pages
-            frame = self.tiff_reader.pages[index].asarray()
+            frame = self.tiff_reader.pages[actual_index].asarray()
 
         # conversion en uint8 pour affichage PyQt
         if frame.dtype != np.uint8:
@@ -3516,6 +3670,8 @@ class MotionAnnotator(QWidget):
             # Handle the "Manually Added" case specifically
             if status_text == "manually added":
                 filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending') == 'manually added']
+            elif status_text == "lightly edited":
+                filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending') == 'lightly edited']
             else:
                 filtered = [o for o in filtered if self.timeline_canvas.onset_validations.get(o, 'pending').lower() == status_text]
         self.filtered_onsets = filtered
@@ -3572,7 +3728,9 @@ class MotionAnnotator(QWidget):
                     recenter_needed = True
                     if current_xlim is not None and self.lock_timeline_zoom:
                         left_vis, right_vis = current_xlim
-                        if left_vis <= onset_frame <= right_vis:
+                        # Add margin so onset doesn't sit at the very edge
+                        margin = view_width * 0.1  # 10% margin on each side
+                        if (left_vis + margin) <= onset_frame <= (right_vis - margin):
                             recenter_needed = False
                     if recenter_needed:
                         half = view_width / 2.0
@@ -4028,14 +4186,17 @@ class MotionAnnotator(QWidget):
             del self.original_onsets[old_onset]
         # Set validation and score based on shift
         prev_status = self.timeline_canvas.onset_validations.get(new_onset, 'pending')
-        if prev_status != 'edited':
+        if prev_status != 'edited' and prev_status != 'lightly edited':
             self.undo_stack.append((new_onset, prev_status, old_onset, orig_onset, old_offset_before_edit, self.original_offsets.get(old_onset, old_offset_before_edit)))
-        self.timeline_canvas.onset_validations[new_onset] = 'edited'
+        # Use 'lightly edited' status for minor edits (< edit_threshold)
+        if shift < self.edit_threshold:
+            self.timeline_canvas.onset_validations[new_onset] = 'lightly edited'
+            score = 1
+        else:
+            self.timeline_canvas.onset_validations[new_onset] = 'edited'
+            score = 0.5
         if hasattr(self, 'event_status'):
-            if shift < self.edit_threshold:
-                self.event_status[new_onset] = 1
-            else:
-                self.event_status[new_onset] = 0.5
+            self.event_status[new_onset] = score
             if old_onset in self.event_status:
                 del self.event_status[old_onset]
         self.edit_widget.hide()
@@ -4074,6 +4235,8 @@ class MotionAnnotator(QWidget):
                 scores.append(1)
             elif status == 'rejected':
                 scores.append(-1)
+            elif status == 'lightly edited':
+                scores.append(1)
             elif status == 'edited':
                 scores.append(0.5)
             elif status == 'manually added':
@@ -4133,6 +4296,8 @@ Average Score: {avg_score:.3f}
                     score = 1
                 elif status == 'rejected':
                     score = -1
+                elif status == 'lightly edited':
+                    score = 1
                 elif status == 'edited':
                     score = 0.5
                 elif status == 'manually added':
@@ -4297,13 +4462,14 @@ Average Score: {avg_score:.3f}
         
         # Calculate statistics
         accepted_count = sum(1 for event in export_events if event[3] == 'accepted')
+        lightly_edited_count = sum(1 for event in export_events if event[3] == 'lightly edited')
         edited_count = sum(1 for event in export_events if event[3] == 'edited')
         rejected_count = sum(1 for event in export_events if event[3] == 'rejected')
         manually_added_count = sum(1 for event in export_events if event[3] == 'manually added')
         pending_count = sum(1 for event in export_events if event[3] == 'pending')
         
         total_events = len(export_events)
-        true_positives = accepted_count + edited_count  # Accepted + Edited
+        true_positives = accepted_count + lightly_edited_count + edited_count  # Accepted + Lightly Edited + Edited
         false_positives = rejected_count  # Rejected
         
         # Ensure we have a motion energy trace to plot (synthesize if missing)
@@ -4420,6 +4586,8 @@ Average Score: {avg_score:.3f}
             # Alpha by validation status
             if status == 'accepted':
                 alpha = 1.0
+            elif status == 'lightly edited':
+                alpha = 1.0
             elif status == 'edited':
                 alpha = 0.8
             elif status == 'rejected':
@@ -4462,6 +4630,11 @@ Average Score: {avg_score:.3f}
             if status == 'accepted':
                 try:
                     ax2.plot(int(onset), max(self.motion_energy) * 1.05, 'o', color='green', markersize=6)
+                except Exception:
+                    pass
+            elif status == 'lightly edited':
+                try:
+                    ax2.plot(int(onset), max(self.motion_energy) * 1.05, 'o', color='#81C784', markersize=6)  # Light green
                 except Exception:
                     pass
             elif status == 'rejected':
@@ -4527,8 +4700,9 @@ Average Score: {avg_score:.3f}
         # Validation marker legend
         legend_elements.extend([
             Line2D([0], [0], marker='o', color='green', markersize=8, label='Accepted', linestyle=''),
-            Line2D([0], [0], marker='o', color='red', markersize=8, label='Rejected', linestyle=''),
+            Line2D([0], [0], marker='o', color='#81C784', markersize=8, label='Lightly Edited', linestyle=''),
             Line2D([0], [0], marker='o', color='orange', markersize=8, label='Edited', linestyle=''),
+            Line2D([0], [0], marker='o', color='red', markersize=8, label='Rejected', linestyle=''),
             Line2D([0], [0], marker='o', color='#00CED1', markersize=8, label='Manually Added', linestyle='')
         ])
         fig.legend(handles=legend_elements, bbox_to_anchor=(0.01, 0.99), loc='upper left', ncol=1, fontsize=11, borderaxespad=0.)
@@ -4539,11 +4713,12 @@ Average Score: {avg_score:.3f}
         stats_text = (
             f"Validation: Total Events: {total_events}, "
             f"Accepted: {accepted_count} ({accepted_count/total_events*100:.1f}%), "
+            f"Lightly Edited: {lightly_edited_count} ({lightly_edited_count/total_events*100:.1f}%), "
             f"Edited: {edited_count} ({edited_count/total_events*100:.1f}%), "
             f"Rejected: {rejected_count} ({rejected_count/total_events*100:.1f}%), "
             f"Manually Added: {manually_added_count} ({manually_added_count/total_events*100:.1f}%), "
             f"Pending: {pending_count} ({pending_count/total_events*100:.1f}%)\n"
-            f"Performance: True Positives (Accepted+Edited): {true_positives} ({true_positives/total_events*100:.1f}%), "
+            f"Performance: True Positives (Accepted+Lightly Edited+Edited): {true_positives} ({true_positives/total_events*100:.1f}%), "
             f"False Positives (Rejected): {false_positives} ({false_positives/total_events*100:.1f}%), "
             f"Precision: {true_positives/(true_positives+false_positives)*100:.1f}% (if no pending/manually added)"
         )
@@ -4563,6 +4738,34 @@ Average Score: {avg_score:.3f}
         plt.show()
             
     # Removed save_performance_metrics() - functionality merged into save_and_export_validation()
+
+    def crop_video_to_classification_range(self, start_frame, end_frame):
+        """Crop video to match the classification frame range."""
+        try:
+            # Store original video info for reference
+            if not hasattr(self, 'original_video_range'):
+                self.original_video_range = (0, self.total_frames)
+            
+            # Update video frame range
+            self.video_start_frame = start_frame
+            self.video_end_frame = end_frame
+            self.total_frames = end_frame - start_frame
+            
+            # Update UI elements
+            self.frame_slider.setMaximum(max(0, self.total_frames - 1))
+            self.onset_spinbox.setMaximum(max(0, self.total_frames - 1))
+            self.offset_spinbox.setMaximum(max(0, self.total_frames - 1))
+            
+            # Reset current frame to be within the new range
+            self.current_frame = min(self.current_frame, self.total_frames - 1)
+            self.frame_slider.setValue(self.current_frame)
+            
+            # Update total frames label
+            self.total_frames_label.setText(str(self.total_frames))
+            
+            print(f"Video cropped: new range {start_frame}-{end_frame}, total frames: {self.total_frames}")
+        except Exception as e:
+            print(f"Warning: Failed to crop video to classification range: {e}")
 
     def load_framewise_table(self, fname):
         import pandas as pd
@@ -5211,6 +5414,8 @@ Average Score: {avg_score:.3f}
                 score = 1
             elif status == 'rejected':
                 score = -1
+            elif status == 'lightly edited':
+                score = 1
             elif status == 'edited':
                 score = 0.5
             elif status == 'manually added':
@@ -5309,6 +5514,9 @@ Average Score: {avg_score:.3f}
             elif status == 'rejected':
                 score = -1
                 status_label = 'rejected'
+            elif status == 'lightly edited':
+                score = 1
+                status_label = 'lightly edited'
             elif status == 'edited':
                 if self.event_status.get(onset, 0.5) == 1:
                     score = 1
@@ -5366,6 +5574,8 @@ Average Score: {avg_score:.3f}
                 score = 1
             elif status == 'rejected':
                 score = -1
+            elif status == 'lightly edited':
+                score = 1
             elif status == 'edited':
                 score = 0.5
             elif status == 'manually added':
@@ -5784,7 +5994,7 @@ Average Score: {avg_score:.3f}
         self.update_onset_info()
 
     def create_validation_pie_chart(self, export_events, save_path=None):
-        """Create and save a pie chart showing the percentage of accepted, edited (<X, >X), pending, rejected, and manually added events."""
+        """Create and save a pie chart showing the percentage of accepted, lightly edited, edited, pending, rejected, and manually added events."""
         import matplotlib.pyplot as plt
         from collections import Counter
         edit_threshold = getattr(self, 'edit_threshold', 5)
@@ -5792,7 +6002,12 @@ Average Score: {avg_score:.3f}
         for event in export_events:
             status = event[3]
             if status == 'edited':
-                status_buckets.append('edited')
+                # Check if this is a lightly edited event (score = 1)
+                score = event[4] if len(event) > 4 else 0.5
+                if score == 1:
+                    status_buckets.append('lightly edited')
+                else:
+                    status_buckets.append('edited')
             else:
                 status_buckets.append(status)
         counter = Counter(status_buckets)
@@ -5801,14 +6016,15 @@ Average Score: {avg_score:.3f}
         colors = []
         color_map = {
             'accepted': '#4CAF50',      # Green
+            'lightly edited': '#81C784', # Light green
             'edited': '#FFA726',        # Orange
             'pending': '#90A4AE',       # Gray-blue
             'rejected': '#F44336',      # Red
             'manually added': '#00CED1' # Cyan
         }
-        for status in ['accepted', 'edited', 'pending', 'rejected', 'manually added']:
+        for status in ['accepted', 'lightly edited', 'edited', 'pending', 'rejected', 'manually added']:
             if counter[status] > 0:
-                labels.append(f"{status.capitalize()} ({counter[status]})")
+                labels.append(f"{status.replace(' ', ' ').title()} ({counter[status]})")
                 sizes.append(counter[status])
                 colors.append(color_map.get(status, '#BDBDBD'))
         if not sizes:

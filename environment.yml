@@ -1,6 +1,6 @@
 name: mousecraft
 channels:
-  - conda-forge
+  # - conda-forge
   - defaults
 dependencies:
   - python=3.9
@@ -12,7 +12,6 @@ dependencies:
   - scipy
   - tqdm
   - opencv
-  - pyqt
   - pip
   - pip:
       - colorama==0.4.6
