@@ -37,7 +37,7 @@ If this does not work, do the git clone (step 2: navigate to desired folder and 
 
 4. Once cloned in the anaconda prompt, do ``cd Mousecraft`` to go into the root folder of MouseCraft GUI.
    
-5. Then create a new environment with ``conda env create -f environment.yml`` . In case creating this environment takes too long, try ``conda env create -f environment.yml -c conda-forge --strict-channel-priority``. Else, try creating the envirnonment via miniconda.
+5. Then create a new environment with ``conda env create -f environment.yml`` . Else, try creating the envirnonment via miniconda.
   
 6. Activate the MouseCraft environment ``conda activate mousecraft`` . 
    
